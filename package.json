@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --env-file-if-exists=.env.local --test tests/*.test.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:psql": "docker exec -it jario-db psql -U jario -d jario",

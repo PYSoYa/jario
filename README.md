@@ -94,6 +94,10 @@ pnpm db:check
 | `radius` | | 50 ~ 2000 (m) | 500 |
 | `industry` | | 업종 코드 (2·4·6자) | 전체 |
 | `limit` | | 1 ~ 2000 | 500 |
+| `order` | | `distance` \| `sample` | `distance` |
+
+`GET /api/places/:id` 는 업소 한 건의 상세(지번주소·표준산업분류·행정동 등)를 준다.
+목록 응답에 이 필드를 다 싣지 않는 이유는 목록이 최대 2,000건까지 나가기 때문이다.
 
 ```bash
 curl "http://localhost:3001/api/places/nearby?lon=126.7244&lat=37.4894&radius=500&industry=I2"
@@ -115,6 +119,7 @@ curl "http://localhost:3001/api/places/nearby?lon=126.7244&lat=37.4894&radius=50
 - **총 개수를 목록과 따로 센다.** `items`에는 지도 마커용 상한이 걸려 있어서 `items.length`로는 밀집도를 알 수 없다. "이 자리 반경 500m에 몇 개"가 이 서비스의 답이므로 잘리지 않은 수가 따로 필요하다.
 - **업종 필터는 접두어 매칭 하나로 3단계를 모두 받는다.** 코드가 대(2자) → 중(4자) → 소(6자) 접두어 구조이고 레벨별 길이가 균일함을 데이터에서 확인했다. 덕분에 레벨별 파라미터를 나누거나 조인을 늘리지 않아도 된다.
 - **좌표 범위를 DB `CHECK`와 같은 값으로 API에서도 막는다.** 한국 밖 좌표는 좌표계를 잘못 쓴 것이지 사용자 입력이 아니다.
+- **지도 마커는 `order=sample`로 뽑는다.** 가까운 순으로 자르면 밀집 지역에서 지도가 거짓말을 한다 — 부평역 반경 500m에서 가까운 순 500개는 전부 **120m 안**에 있어서, 바깥 380m가 업소 없는 땅처럼 보였다. `hashtext(place_id)` 순으로 뽑으면 위치와 무관하게 고르게 추려지고(중앙값 94m → 305m), 같은 입력에는 같은 표본이 나와 지도가 깜빡이지 않는다.
 - `radius` 상한 2,000m — 없으면 요청 한 번으로 인천 전체를 긁을 수 있고, 도보권을 넘으면 상권 분석의 의미도 옅어진다.
 
 ## 화면
@@ -181,7 +186,21 @@ docker exec -i jario-db psql -U jario -d jario -c "TRUNCATE staging_place; \
   WITH (FORMAT csv, HEADER true, ENCODING 'UTF8');"
 pnpm data:transform                                                          # staging → place/industry
 pnpm db:check                                                                # 좌표계·인덱스 검증
+pnpm test                                                                    # 22건
 ```
+
+## 테스트
+
+```bash
+pnpm test
+```
+
+목(mock)을 쓰지 않는다. 이 프로젝트에서 틀릴 수 있는 건 TypeScript가 아니라 SQL이다 —
+geography 거리 계산, 업종 접두어 매칭, 표본 추출이 전부 DB 안에서 일어난다.
+그래서 통합 테스트는 로컬 PostGIS의 실제 인천 데이터를 그대로 쓴다(적재가 선행돼야 한다).
+
+테스트가 실제로 회귀를 잡는지도 확인했다. `geography`를 `geometry`로 바꿔
+거리 단위를 도(degree)로 되돌리자 **22건 중 8건이 실패**했다.
 
 적재는 애플리케이션 INSERT가 아니라 서버측 `COPY`다 (13만 행 0.8초). `data/`는 컨테이너에 `/data`로 마운트돼 있다.
 
@@ -196,6 +215,8 @@ pnpm db:check                                                                # �
   - [x] `ST_DWithin` + GiST 인덱스, 실행계획으로 확인 (7.7ms)
   - [x] 조회 API `GET /api/places/nearby`
   - [x] 지도 UI (카카오맵) — 클릭으로 자리 선택, 내 위치, 반경·업종 필터
+  - [x] 업소 상세 — 마커/목록 클릭 시 업종 경로·주소·층, 반경 내 동종 업소 수
+  - [x] 테스트 22건 (`pnpm test`)
 - [ ] **M2** 밀집도 분석 — 업종별 히트맵, 행정동 집계, 과밀/빈틈 탐색
 - [ ] **M3** 후보지 A/B 비교 리포트 저장·공유, 인증
 - [ ] **M4** 배포, 분기 갱신 파이프라인, 성능 측정 기록

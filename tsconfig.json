@@ -9,6 +9,10 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // 테스트를 번들러 없이 `node --test`로 그대로 돌리기 위해 필요하다.
+    // Node ESM은 상대 경로에 확장자를 요구하는데, bundler 해석에서는
+    // .ts 확장자를 적는 것이 기본적으로 금지돼 있다.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",

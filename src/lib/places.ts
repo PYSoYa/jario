@@ -1,4 +1,5 @@
-import { sql } from './db'
+// 확장자를 명시한다 — 테스트가 번들러 없이 `node --test`로 이 모듈을 직접 불러온다.
+import { sql } from './db.ts'
 
 export type NearbyParams = {
   lon: number
@@ -7,6 +8,16 @@ export type NearbyParams = {
   /** 업종 코드. 대(2자)·중(4자)·소(6자) 어느 레벨이든 받는다. */
   industry?: string
   limit: number
+  /**
+   * 결과가 limit을 넘을 때 무엇을 남길지.
+   *
+   * distance — 가까운 순. 목록에 쓴다.
+   * sample   — 공간적으로 치우치지 않는 표본. 지도 마커에 쓴다.
+   *
+   * 지도에 '가까운 순 N개'를 찍으면 밀집 지역에서 중심 근처만 채워지고,
+   * 바깥은 업소가 없는 것처럼 보인다. 실제로는 잘린 것뿐인데 지도가 거짓말을 하게 된다.
+   */
+  order?: 'distance' | 'sample'
 }
 
 export type NearbyPlace = {
@@ -28,6 +39,86 @@ export type IndustryCount = {
   code: string
   name: string
   count: number
+}
+
+export type PlaceDetail = {
+  placeId: string
+  name: string
+  branchName: string | null
+  industryCode: string
+  industryPath: string[]
+  ksicCode: string | null
+  ksicName: string | null
+  sigungu: string
+  admDong: string
+  roadAddress: string | null
+  lotAddress: string | null
+  buildingName: string | null
+  floorNo: number | null
+  floorRaw: string | null
+  lon: number
+  lat: number
+}
+
+/** 업소 한 건의 전체 정보. 목록 응답에는 담지 않는 필드까지 준다. */
+export async function getPlaceDetail(placeId: string): Promise<PlaceDetail | null> {
+  const [row] = await sql<
+    {
+      place_id: string
+      name: string
+      branch_name: string | null
+      industry_code: string
+      sub_name: string
+      mid_name: string
+      top_name: string
+      ksic_code: string | null
+      ksic_name: string | null
+      sigungu_name: string
+      adm_dong_name: string
+      road_address: string | null
+      lot_address: string | null
+      building_name: string | null
+      floor_no: number | null
+      floor_raw: string | null
+      lon: number
+      lat: number
+    }[]
+  >`
+    SELECT
+      p.place_id, p.name, p.branch_name, p.industry_code,
+      sub.name AS sub_name, mid.name AS mid_name, top.name AS top_name,
+      p.ksic_code, p.ksic_name,
+      p.sigungu_name, p.adm_dong_name,
+      p.road_address, p.lot_address, p.building_name,
+      p.floor_no, p.floor_raw,
+      p.lon, p.lat
+    FROM place p
+    JOIN industry sub ON sub.code = p.industry_code
+    JOIN industry mid ON mid.code = sub.parent_code
+    JOIN industry top ON top.code = mid.parent_code
+    WHERE p.place_id = ${placeId}
+  `
+
+  if (!row) return null
+
+  return {
+    placeId: row.place_id,
+    name: row.name,
+    branchName: row.branch_name,
+    industryCode: row.industry_code,
+    industryPath: [row.top_name, row.mid_name, row.sub_name],
+    ksicCode: row.ksic_code,
+    ksicName: row.ksic_name,
+    sigungu: row.sigungu_name,
+    admDong: row.adm_dong_name,
+    roadAddress: row.road_address,
+    lotAddress: row.lot_address,
+    buildingName: row.building_name,
+    floorNo: row.floor_no,
+    floorRaw: row.floor_raw,
+    lon: row.lon,
+    lat: row.lat,
+  }
 }
 
 /**
@@ -78,7 +169,13 @@ export async function findNearbyPlaces(p: NearbyParams): Promise<NearbyPlace[]> 
     JOIN industry top ON top.code = mid.parent_code
     WHERE ST_DWithin(p.geom, center.g, ${p.radius})
       ${industryFilter(p.industry)}
-    ORDER BY distance_m
+    ${
+      p.order === 'sample'
+        ? // place_id 해시 순. 위치와 무관하므로 반경 안에서 고르게 뽑히고,
+          // 같은 입력이면 같은 결과라 지도가 새로고침마다 깜빡이지 않는다.
+          sql`ORDER BY hashtext(p.place_id)`
+        : sql`ORDER BY distance_m`
+    }
     LIMIT ${p.limit}
   `
 

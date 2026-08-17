@@ -87,6 +87,8 @@ declare namespace kakao.maps {
       type: 'click' | 'dblclick',
       handler: (mouseEvent: { latLng: LatLng }) => void,
     ): void
+    /** 마커 클릭은 좌표 인자를 주지 않는다 — 어떤 마커인지는 클로저로 안다. */
+    function addListener(target: Marker, type: 'click', handler: () => void): void
   }
 
   /** autoload=false로 로드했을 때 SDK 초기화를 끝내는 콜백 */

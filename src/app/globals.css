@@ -79,6 +79,8 @@ body {
 
 .survey-ping {
   animation: survey-ping 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  /* 애니메이션이 끝나도 요소는 남는다. 클릭을 가로채지 않게 막아둔다. */
+  pointer-events: none;
 }
 
 /* 키보드 초점은 항상 보여야 한다. */

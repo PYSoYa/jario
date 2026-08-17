@@ -6,6 +6,25 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 type Industry = { code: string; name: string }
 
+type PlaceDetail = {
+  placeId: string
+  name: string
+  branchName: string | null
+  industryCode: string
+  industryPath: string[]
+  ksicCode: string | null
+  ksicName: string | null
+  sigungu: string
+  admDong: string
+  roadAddress: string | null
+  lotAddress: string | null
+  buildingName: string | null
+  floorNo: number | null
+  floorRaw: string | null
+  lon: number
+  lat: number
+}
+
 type NearbyResponse = {
   total: number
   truncated: boolean
@@ -49,8 +68,21 @@ function withinCoverage(lon: number, lat: number) {
  * 흰 테두리를 두른 작은 점으로 바꾼다 — 라벨이 빽빽한 지도 위에서는
  * 색보다 흰 테두리가 형태를 살려준다.
  */
-const DOT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">
-<circle cx="7" cy="7" r="4.5" fill="#e0447f" stroke="#fff" stroke-width="2"/></svg>`
+/**
+ * 색의 역할을 나눈다.
+ *   분홍 = 내가 고른 것 (크로스헤어, 반경선, 선택한 업소)
+ *   어두운 점 = 데이터 (업소, 클러스터)
+ *
+ * 처음엔 업소 점도 분홍으로 뒀는데, 반경 원의 분홍 채움 위에서 점이 묻혔다.
+ * 어두운 점 + 흰 링이 밝은 지도와 분홍 채움 양쪽에서 가장 잘 버틴다.
+ */
+const DOT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
+<circle cx="10" cy="10" r="6.5" fill="#14111a" stroke="#ffffff" stroke-width="2.5"/></svg>`
+
+/** 선택한 업소만 분홍으로, 조금 더 크게. */
+const DOT_SELECTED_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
+<circle cx="13" cy="13" r="10" fill="#e0447f" fill-opacity="0.25"/>
+<circle cx="13" cy="13" r="7" fill="#c01f5c" stroke="#ffffff" stroke-width="3"/></svg>`
 
 /**
  * 내가 찍은 자리 표식.
@@ -106,7 +138,14 @@ function formatRadius(m: number) {
 }
 
 async function fetchNearby(
-  q: { lon: number; lat: number; radius: number; industry?: string },
+  q: {
+    lon: number
+    lat: number
+    radius: number
+    industry?: string
+    limit?: number
+    order?: 'distance' | 'sample'
+  },
   signal: AbortSignal,
 ): Promise<NearbyResponse> {
   const params = new URLSearchParams({
@@ -115,10 +154,22 @@ async function fetchNearby(
     radius: String(q.radius),
   })
   if (q.industry) params.set('industry', q.industry)
+  if (q.limit) params.set('limit', String(q.limit))
+  if (q.order) params.set('order', q.order)
 
   const res = await fetch(`/api/places/nearby?${params}`, { signal })
   if (!res.ok) throw new Error(`조회에 실패했습니다 (${res.status})`)
   return res.json()
+}
+
+/** 상세 정보 한 줄. 라벨 폭을 고정해 값이 세로로 정렬되게 한다. */
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3">
+      <dt className="w-20 shrink-0 text-muted">{label}</dt>
+      <dd className="min-w-0 flex-1 break-words text-paper/90">{children}</dd>
+    </div>
+  )
 }
 
 export default function MapPanel({ industries }: { industries: Industry[] }) {
@@ -137,6 +188,7 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   const [industry, setIndustry] = useState('')
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   /**
    * 현재 위치로 이동한다.
@@ -175,24 +227,56 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
     )
   }, [])
 
-  // 분포는 항상 업종 필터 없이 받는다. 필터를 걸어도 주변 업종 구성을
-  // 계속 볼 수 있어야 "이 자리가 무슨 상권인지"를 판단할 수 있다.
+  // 세 개의 조회는 목적이 서로 다르다.
+  //
+  //   분포 — 업종 필터를 걸어도 주변 구성은 전체 기준으로 봐야 이 자리가
+  //          무슨 상권인지 알 수 있다. 목록은 필요 없으니 limit=1.
+  //   목록 — 가까운 순. 사람이 훑는 용도라 25건이면 충분하다.
+  //   마커 — 공간적으로 고른 표본. 가까운 순으로 뽑으면 밀집 지역에서
+  //          중심만 채워지고 바깥이 비어 보인다.
   const contextQuery = useQuery({
-    queryKey: ['nearby', center.lon, center.lat, radius, ''],
-    queryFn: ({ signal }) => fetchNearby({ ...center, radius }, signal),
+    queryKey: ['nearby', center.lon, center.lat, radius, '', 1, 'distance'],
+    queryFn: ({ signal }) => fetchNearby({ ...center, radius, limit: 1 }, signal),
   })
 
-  // 업종을 고르면 지도 마커와 헤드라인 숫자만 그 업종으로 좁힌다.
-  const focusQuery = useQuery({
-    queryKey: ['nearby', center.lon, center.lat, radius, industry],
-    queryFn: ({ signal }) => fetchNearby({ ...center, radius, industry }, signal),
-    enabled: industry !== '',
+  const listQuery = useQuery({
+    queryKey: ['nearby', center.lon, center.lat, radius, industry, 25, 'distance'],
+    queryFn: ({ signal }) => fetchNearby({ ...center, radius, industry, limit: 25 }, signal),
+  })
+
+  const markersQuery = useQuery({
+    queryKey: ['nearby', center.lon, center.lat, radius, industry, 500, 'sample'],
+    queryFn: ({ signal }) =>
+      fetchNearby({ ...center, radius, industry, limit: 500, order: 'sample' }, signal),
+  })
+
+  const detailQuery = useQuery({
+    queryKey: ['place', selectedId],
+    queryFn: async ({ signal }) => {
+      const res = await fetch(`/api/places/${selectedId}`, { signal })
+      if (!res.ok) throw new Error(`업소 정보를 불러오지 못했습니다 (${res.status})`)
+      return res.json() as Promise<PlaceDetail>
+    },
+    enabled: selectedId !== null,
+  })
+
+  const detail = detailQuery.data ?? null
+
+  // 이 업소와 같은 소분류가 지금 반경 안에 몇 곳인지.
+  // 상세를 데이터 나열로 끝내지 않고, 이 서비스가 답하려는 질문을 한 업소에 적용한다.
+  // limit=1로 목록은 받지 않는다 — 필요한 건 총 개수뿐이다.
+  const peersQuery = useQuery({
+    queryKey: ['nearby', center.lon, center.lat, radius, detail?.industryCode, 'peers'],
+    queryFn: ({ signal }) =>
+      fetchNearby({ ...center, radius, industry: detail!.industryCode, limit: 1 }, signal),
+    enabled: detail !== null,
   })
 
   const context = contextQuery.data ?? null
-  const focused = industry ? (focusQuery.data ?? null) : context
-  const loading = contextQuery.isFetching || focusQuery.isFetching
-  const error = contextQuery.error ?? focusQuery.error
+  const focused = listQuery.data ?? null
+  const markers = markersQuery.data ?? null
+  const loading = contextQuery.isFetching || listQuery.isFetching
+  const error = contextQuery.error ?? listQuery.error
 
   const initMap = useCallback(() => {
     if (!mapRef.current || map.current) return
@@ -206,7 +290,10 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
     clusterer.current = new kakao.maps.MarkerClusterer({
       map: map.current,
       averageCenter: true,
-      minLevel: 4,
+      // 기본 화면(level 4)에서 개별 업소가 보이게 한다.
+      // minLevel은 "이 레벨부터 뭉친다"는 뜻이라 4로 두면 첫 화면이 전부 클러스터였다.
+      // 이 서비스에서는 점이 빽빽한 것 자체가 밀도라는 정보다.
+      minLevel: 5,
       disableClickZoom: false,
       calculator: [10, 100, 500],
       styles: [
@@ -226,6 +313,7 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
       window.clearTimeout(clickTimer.current)
       clickTimer.current = window.setTimeout(() => {
         setNotice(null)
+        setSelectedId(null)
         setCenter({ lat, lon })
       }, 260)
     })
@@ -279,7 +367,9 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
       // 클러스터 마커보다 항상 위에 있어야 한다.
       zIndex: 100,
       content:
-        '<div style="position:relative;width:0;height:0">' +
+        // pointer-events:none 이 없으면 핑(140px 원)이 애니메이션이 끝난 뒤에도
+        // DOM에 남아 중심 근처 업소 마커의 클릭을 가로챈다.
+        '<div style="position:relative;width:0;height:0;pointer-events:none">' +
         '<span class="survey-ping" style="position:absolute;left:-70px;top:-70px;width:140px;height:140px;' +
         'border:3px solid #c01f5c;border-radius:9999px;display:block"></span>' +
         `<span style="position:absolute;left:-19px;top:-19px;display:block;filter:drop-shadow(0 1px 3px rgba(0,0,0,.5))">${CROSSHAIR}</span>` +
@@ -290,27 +380,39 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
 
   // 지도 마커
   useEffect(() => {
-    if (!ready || !map.current || !clusterer.current || !focused) return
+    if (!ready || !map.current || !clusterer.current || !markers) return
     const { kakao } = window
 
     const dot = new kakao.maps.MarkerImage(
       `data:image/svg+xml;utf8,${encodeURIComponent(DOT_SVG)}`,
-      new kakao.maps.Size(14, 14),
-      { offset: new kakao.maps.Point(7, 7) },
+      new kakao.maps.Size(20, 20),
+      { offset: new kakao.maps.Point(10, 10) },
+    )
+    const dotSelected = new kakao.maps.MarkerImage(
+      `data:image/svg+xml;utf8,${encodeURIComponent(DOT_SELECTED_SVG)}`,
+      new kakao.maps.Size(26, 26),
+      { offset: new kakao.maps.Point(13, 13) },
     )
 
     clusterer.current.clear()
     clusterer.current.addMarkers(
-      focused.items.map(
-        (p) =>
-          new kakao.maps.Marker({
-            position: new kakao.maps.LatLng(p.lat, p.lon),
-            title: p.name,
-            image: dot,
-          }),
-      ),
+      markers.items.map((p) => {
+        const isSelected = p.placeId === selectedId
+        const marker = new kakao.maps.Marker({
+          position: new kakao.maps.LatLng(p.lat, p.lon),
+          title: p.name,
+          image: isSelected ? dotSelected : dot,
+          zIndex: isSelected ? 50 : undefined,
+        })
+        // 어떤 업소인지는 클로저로 안다. 마커 클릭은 자리 선택이 아니라 상세 보기다.
+        kakao.maps.event.addListener(marker, 'click', () => {
+          window.clearTimeout(clickTimer.current) // 지도 클릭(자리 이동)으로 번지지 않게
+          setSelectedId(p.placeId)
+        })
+        return marker
+      }),
     )
-  }, [ready, focused])
+  }, [ready, markers, selectedId])
 
   const appKey = process.env.NEXT_PUBLIC_KAKAO_MAP_KEY
   const max = context?.byTopIndustry[0]?.count ?? 0
@@ -416,6 +518,98 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {error ? (
             <p className="px-5 py-6 text-sm text-paper">{error.message}</p>
+          ) : selectedId ? (
+            <div className="px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setSelectedId(null)}
+                className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-paper"
+              >
+                <span aria-hidden="true">←</span> 목록으로
+              </button>
+
+              {detailQuery.isPending && <p className="text-sm text-muted">불러오는 중…</p>}
+              {detailQuery.error && (
+                <p className="text-sm text-paper">{(detailQuery.error as Error).message}</p>
+              )}
+
+              {detail && (
+                <article>
+                  <h2 className="text-xl font-semibold leading-tight text-paper">
+                    {detail.name}
+                    {detail.branchName && (
+                      <span className="ml-1.5 text-sm font-normal text-muted">
+                        {detail.branchName}
+                      </span>
+                    )}
+                  </h2>
+
+                  <p className="mt-1.5 text-sm text-muted">
+                    {detail.industryPath.map((step, i) => (
+                      <span key={step}>
+                        {i > 0 && <span className="mx-1 text-muted/60">›</span>}
+                        <span className={i === 2 ? 'text-paper' : undefined}>{step}</span>
+                      </span>
+                    ))}
+                  </p>
+
+                  {/* 이 서비스가 답하려는 질문을 한 업소에 적용한 값. 상세의 핵심이다. */}
+                  <div className="mt-4 rounded border border-line bg-raised px-4 py-3">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="measure text-2xl font-semibold text-commerce">
+                        {peersQuery.data ? peersQuery.data.total.toLocaleString('ko-KR') : '—'}
+                      </span>
+                      <span className="text-sm text-muted">곳</span>
+                    </div>
+                    <p className="mt-0.5 text-xs leading-snug text-muted">
+                      선택한 자리 반경 <span className="measure">{formatRadius(radius)}</span> 안의{' '}
+                      <span className="text-paper">{detail.industryPath[2]}</span> 업소 수 (이 가게
+                      포함)
+                    </p>
+                  </div>
+
+                  <dl className="mt-4 space-y-2.5 text-sm">
+                    <Row label="도로명">{detail.roadAddress ?? '—'}</Row>
+                    <Row label="지번">{detail.lotAddress ?? '—'}</Row>
+                    {detail.buildingName && <Row label="건물">{detail.buildingName}</Row>}
+                    <Row label="층">
+                      {detail.floorNo !== null ? (
+                        <span className="measure">
+                          {detail.floorNo < 0 ? `지하 ${-detail.floorNo}층` : `${detail.floorNo}층`}
+                        </span>
+                      ) : detail.floorRaw ? (
+                        // 층수로 환산할 수 없는 원문은 그대로 보여준다. 버리지 않았다.
+                        <span className="text-muted">{detail.floorRaw} (원문)</span>
+                      ) : (
+                        '—'
+                      )}
+                    </Row>
+                    <Row label="행정동">
+                      {detail.sigungu} {detail.admDong}
+                    </Row>
+                    <Row label="업종코드">
+                      <span className="measure">{detail.industryCode}</span>
+                    </Row>
+                    {detail.ksicName && (
+                      <Row label="표준산업분류">
+                        {detail.ksicName}{' '}
+                        <span className="measure text-muted">{detail.ksicCode}</span>
+                      </Row>
+                    )}
+                    <Row label="좌표">
+                      <span className="measure text-xs">
+                        {detail.lon.toFixed(6)}, {detail.lat.toFixed(6)}
+                      </span>
+                    </Row>
+                  </dl>
+
+                  <p className="mt-4 text-xs leading-snug text-muted">
+                    소상공인시장진흥공단 2026-06 스냅샷입니다. 폐업·이전이 반영되지 않았을 수
+                    있습니다.
+                  </p>
+                </article>
+              )}
+            </div>
           ) : (
             <>
               <div className="px-5 py-5">
@@ -433,9 +627,10 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
                   반경 <span className="measure text-paper">{formatRadius(radius)}</span> 안의{' '}
                   {selected ? <span className="text-paper">{selected.name}</span> : '모든'} 업소
                 </p>
-                {focused?.truncated && (
-                  <p className="mt-2 text-xs text-muted">
-                    지도에는 가까운 <span className="measure">{focused.items.length}</span>곳만 표시됩니다.
+                {markers?.truncated && (
+                  <p className="mt-2 text-xs leading-snug text-muted">
+                    지도에는 이 중 <span className="measure">{markers.items.length}</span>곳을 고르게
+                    추려 표시합니다.
                   </p>
                 )}
                 {focused?.total === 0 && (
@@ -482,25 +677,35 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
 
               {focused && focused.items.length > 0 && (
                 <div className="border-t border-line px-5 py-4">
-                  <h2 className="mb-3 text-xs font-medium tracking-wide text-muted">가까운 순</h2>
-                  <ul className="space-y-2.5">
+                  <h2 className="mb-3 text-xs font-medium tracking-wide text-muted">
+                    가까운 순 <span className="measure">{focused.items.length}</span>곳
+                  </h2>
+                  <ul className="space-y-0.5">
                     {focused.items.slice(0, 25).map((p) => (
-                      <li key={p.placeId} className="flex items-baseline justify-between gap-3">
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm text-paper">{p.name}</span>
-                          <span className="block truncate text-xs text-muted">
-                            {p.industryName}
-                            {p.floorNo !== null && (
-                              <>
-                                {' · '}
-                                <span className="measure">
-                                  {p.floorNo < 0 ? `지하 ${-p.floorNo}층` : `${p.floorNo}층`}
-                                </span>
-                              </>
-                            )}
+                      <li key={p.placeId}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(p.placeId)}
+                          className="flex w-full items-baseline justify-between gap-3 rounded px-2 py-1.5 text-left transition-colors hover:bg-raised"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm text-paper">{p.name}</span>
+                            <span className="block truncate text-xs text-muted">
+                              {p.industryName}
+                              {p.floorNo !== null && (
+                                <>
+                                  {' · '}
+                                  <span className="measure">
+                                    {p.floorNo < 0 ? `지하 ${-p.floorNo}층` : `${p.floorNo}층`}
+                                  </span>
+                                </>
+                              )}
+                            </span>
                           </span>
-                        </span>
-                        <span className="measure shrink-0 text-xs text-muted">{p.distanceM}m</span>
+                          <span className="measure shrink-0 text-xs text-muted">
+                            {p.distanceM}m
+                          </span>
+                        </button>
                       </li>
                     ))}
                   </ul>
