@@ -27,9 +27,9 @@ const usesPooler = /pooler\.supabase\.com|:6543/.test(connectionString)
 
 function create() {
   return postgres(connectionString!, {
-    // 서버리스 인스턴스 하나가 커넥션을 여러 개 쥐고 있을 이유가 없다.
-    // 인스턴스 수만큼 곱해지므로 작게 잡는다.
-    max: process.env.NODE_ENV === 'production' ? 1 : 10,
+    // 인스턴스 수만큼 곱해지므로 작게 잡되, 1로 두면 목록·집계처럼 병렬로 보낸
+    // 쿼리가 한 줄로 서서 응답 시간이 그대로 두 배가 된다.
+    max: process.env.NODE_ENV === 'production' ? 3 : 10,
     prepare: !usesPooler,
 
     // 공간 쿼리는 종종 수백 ms가 걸린다. 개발 중 느린 쿼리를 놓치지 않도록 넉넉히 두되
