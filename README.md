@@ -280,6 +280,18 @@ PostGIS 3.3.7 · place 136,995 · industry 330 · DB 99MB / 500MB
 Bitmap Index Scan on place_geom_idx · 77ms
 ```
 
+### 링크를 살려두기
+
+Supabase 무료 티어는 **일주일 요청이 없으면 프로젝트를 일시정지**한다. 포트폴리오는 링크가
+살아 있는 것이 전부라, 죽은 링크는 없는 것보다 나쁘다.
+
+`.github/workflows/keepalive.yml`이 3일마다 배포된 API를 호출한다. 단순 핑이 아니라
+응답의 `total`이 1,000 이상인지까지 본다 — DB가 멈췄거나 연결이 끊기면 200이 떠도
+`total`이 0이 되기 때문이다. 유지 장치이자 최소한의 감시다.
+
+⚠️ GitHub Actions의 `schedule`은 **저장소가 60일간 활동이 없으면 자동으로 비활성화**된다.
+장기간 손대지 않을 거라면 외부 모니터링(UptimeRobot 등)을 함께 두는 편이 안전하다.
+
 ### 배포 후 할 것
 
 카카오 콘솔 `[앱 → 플랫폼 키 → JavaScript 키 → JavaScript SDK 도메인]`에 배포 도메인을 추가한다.

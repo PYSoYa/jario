@@ -1,0 +1,42 @@
+name: keepalive
+
+# Supabase 무료 티어는 일주일 동안 요청이 없으면 프로젝트를 일시정지한다.
+# 포트폴리오는 링크가 살아 있는 것이 전부라, 죽은 링크는 없는 것보다 나쁘다.
+#
+# 그래서 단순히 핑만 보내지 않고 실제 응답을 검사한다. DB가 멈췄거나
+# 배포가 깨졌으면 여기서 빨간불이 뜬다 — 유지 장치이자 최소한의 감시다.
+
+on:
+  schedule:
+    # 3일마다 12:00 KST. 일시정지 기준(7일)의 절반이라 한 번 실패해도 여유가 있다.
+    - cron: '0 3 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 배포된 API가 실제 데이터를 돌려주는지 확인
+        run: |
+          set -euo pipefail
+          URL='https://jario-pysoya1.vercel.app/api/places/nearby?lon=126.7244&lat=37.4894&radius=500&limit=1'
+
+          code=$(curl -sS -o /tmp/res.json -w '%{http_code}' --max-time 30 "$URL")
+          echo "HTTP $code"
+          cat /tmp/res.json | head -c 400; echo
+
+          if [ "$code" != "200" ]; then
+            echo "::error::응답 코드가 200이 아닙니다 ($code)"
+            exit 1
+          fi
+
+          # 200이어도 total이 0이면 DB가 비었거나 연결이 끊긴 것이다.
+          # 부평역 반경 500m는 항상 수천 곳이 나와야 한다.
+          total=$(python3 -c "import json;print(json.load(open('/tmp/res.json')).get('total',0))")
+          echo "total = $total"
+          if [ "$total" -lt 1000 ]; then
+            echo "::error::업소 수가 $total 건입니다. DB가 비었거나 연결이 끊겼을 수 있습니다."
+            exit 1
+          fi
+
+          echo "정상 — Supabase가 깨어 있고 데이터도 살아 있습니다."
