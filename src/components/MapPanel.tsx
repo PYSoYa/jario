@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import Script from 'next/script'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import DongRanking from './DongRanking'
 
 type Industry = { code: string; name: string }
 
@@ -191,6 +192,7 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [view, setView] = useState<'spot' | 'dong'>('spot')
 
   /**
    * 현재 위치로 이동한다.
@@ -535,8 +537,53 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
           </div>
         </div>
 
+        {/* 두 가지 질문을 나눈다. "이 자리는 어떤가"와 "어느 동네가 나은가". */}
+        <div
+          role="tablist"
+          aria-label="분석 방식"
+          className="flex shrink-0 gap-1 border-b border-line px-5 py-2"
+        >
+          {(
+            [
+              ['spot', '이 자리'],
+              ['dong', '동네 비교'],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={view === key}
+              onClick={() => setView(key)}
+              className={`rounded px-3 py-1 text-sm transition-colors ${
+                view === key ? 'bg-raised text-paper' : 'text-muted hover:text-paper'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {error ? (
+          {view === 'dong' ? (
+            industry ? (
+              <DongRanking
+                industry={industry}
+                industryName={selected?.name ?? '이 업종'}
+                onPick={(spot) => {
+                  setSelectedId(null)
+                  setNotice(null)
+                  setCenter(spot)
+                  setView('spot')
+                  map.current?.panTo(new window.kakao.maps.LatLng(spot.lat, spot.lon))
+                }}
+              />
+            ) : (
+              <p className="px-5 py-6 text-sm leading-relaxed text-muted">
+                업종을 먼저 고르세요. 동네 비교는 &ldquo;이 업종이 상권 규모에 비해 많은가&rdquo;를
+                보는 것이라 대상 업종이 있어야 합니다.
+              </p>
+            )
+          ) : error ? (
             <p className="px-5 py-6 text-sm text-paper">{error.message}</p>
           ) : selectedId ? (
             <div className="px-5 py-4">
