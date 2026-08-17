@@ -28,8 +28,6 @@ export type NearbyPlace = {
   floorNo: number | null
   industryCode: string
   industryName: string
-  industryMid: string
-  industryTop: string
   lon: number
   lat: number
   distanceM: number
@@ -144,8 +142,6 @@ export async function findNearbyPlaces(p: NearbyParams): Promise<NearbyPlace[]> 
       floor_no: number | null
       industry_code: string
       industry_name: string
-      industry_mid: string
-      industry_top: string
       lon: number
       lat: number
       distance_m: number
@@ -157,16 +153,15 @@ export async function findNearbyPlaces(p: NearbyParams): Promise<NearbyPlace[]> 
     SELECT
       p.place_id, p.name, p.branch_name, p.road_address, p.floor_no,
       p.industry_code,
-      sub.name  AS industry_name,
-      mid.name  AS industry_mid,
-      top.name  AS industry_top,
+      sub.name AS industry_name,
       p.lon, p.lat,
       ST_Distance(p.geom, center.g) AS distance_m
+    -- 업종 조인은 하나면 된다. 예전에는 대·중분류까지 3번 조인했는데
+    -- 화면에서 쓰지도 않는 값이었고, 반경 안 업소 수만큼 조인이 반복돼
+    -- 집계 쿼리에서만 2초를 잡아먹었다.
     FROM place p
     CROSS JOIN center
     JOIN industry sub ON sub.code = p.industry_code
-    JOIN industry mid ON mid.code = sub.parent_code
-    JOIN industry top ON top.code = mid.parent_code
     WHERE ST_DWithin(p.geom, center.g, ${p.radius})
       ${industryFilter(p.industry)}
     ${
@@ -187,8 +182,6 @@ export async function findNearbyPlaces(p: NearbyParams): Promise<NearbyPlace[]> 
     floorNo: r.floor_no,
     industryCode: r.industry_code,
     industryName: r.industry_name,
-    industryMid: r.industry_mid,
-    industryTop: r.industry_top,
     lon: r.lon,
     lat: r.lat,
     distanceM: Math.round(r.distance_m),
@@ -217,22 +210,34 @@ export async function summarizeNearby(
     WITH center AS (
       SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g
     )
-    SELECT
-      ${bySub ? sql`sub.code` : sql`top.code`} AS code,
-      ${bySub ? sql`sub.name` : sql`top.name`} AS name,
-      count(*)::text AS count,
-      -- 윈도 함수는 LIMIT보다 먼저 계산된다. 잘라내기 전 전체 합이 담긴다.
-      sum(count(*)) OVER ()::text AS total
-    FROM place p
-    CROSS JOIN center
-    JOIN industry sub ON sub.code = p.industry_code
-    JOIN industry mid ON mid.code = sub.parent_code
-    JOIN industry top ON top.code = mid.parent_code
-    WHERE ST_DWithin(p.geom, center.g, ${p.radius})
-      ${industryFilter(p.industry)}
-    GROUP BY 1, 2
-    ORDER BY count(*) DESC, 2
-    LIMIT ${topN}
+    /*
+     * 집계를 먼저 하고 업종 이름은 마지막에 붙인다.
+     *
+     * 조인을 먼저 하면 반경 안 업소 수(강남역 6,615)만큼 업종 조회가 반복된다.
+     * 실제로 Nested Loop 에서만 330ms가 들었다. 집계 후에는 15행뿐이라 사실상 공짜다.
+     *
+     * 대분류로 묶을 때도 트리를 거슬러 올라가지 않는다. 코드가 접두어 구조라
+     * 앞 두 자가 곧 대분류 코드다(G20405 → G2).
+     * (예전에는 sub→mid→top 을 3번 조인해 2,042ms가 나왔다)
+     */
+    , agg AS (
+      SELECT
+        ${bySub ? sql`p.industry_code` : sql`substring(p.industry_code, 1, 2)`} AS code,
+        count(*) AS c,
+        -- 윈도 함수는 LIMIT보다 먼저 계산된다. 잘라내기 전 전체 합이 담긴다.
+        sum(count(*)) OVER () AS total
+      FROM place p
+      CROSS JOIN center
+      WHERE ST_DWithin(p.geom, center.g, ${p.radius})
+        ${industryFilter(p.industry)}
+      GROUP BY 1
+      ORDER BY count(*) DESC
+      LIMIT ${topN}
+    )
+    SELECT a.code, i.name, a.c::text AS count, a.total::text AS total
+    FROM agg a
+    JOIN industry i ON i.code = a.code
+    ORDER BY a.c DESC, i.name
   `
 
   return {
