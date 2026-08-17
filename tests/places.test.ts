@@ -130,10 +130,22 @@ describe('마커 표본 추출 (order: sample)', () => {
 })
 
 describe('summarizeNearby', () => {
-  it('총계는 업종별 합계와 일치한다', async () => {
-    const s = await summarizeNearby({ ...BUPYEONG, radius: 500 })
-    const sum = s.byTopIndustry.reduce((a, r) => a + r.count, 0)
+  it('분포가 다 담기면 총계는 업종별 합계와 일치한다', async () => {
+    // 대분류는 10개뿐이라 topN 안에 전부 들어온다.
+    const s = await summarizeNearby({ ...BUPYEONG, radius: 500, group: 'top', topN: 50 })
+    const sum = s.breakdown.reduce((a, r) => a + r.count, 0)
     assert.equal(s.total, sum)
+  })
+
+  /**
+   * 총계는 윈도 함수로 LIMIT 이전에 계산한다. 이걸 breakdown 합으로 바꾸면
+   * 상위 N개만 더한 값이 "반경 안 업소 수"로 표시되어 조용히 작아진다.
+   */
+  it('분포를 잘라도 총계는 잘리지 않는다', async () => {
+    const s = await summarizeNearby({ ...BUPYEONG, radius: 500, group: 'sub', topN: 3 })
+    const sum = s.breakdown.reduce((a, r) => a + r.count, 0)
+    assert.equal(s.breakdown.length, 3)
+    assert.ok(s.total > sum, `총계(${s.total})가 상위 3개 합(${sum})으로 잘렸다`)
   })
 
   it('목록이 잘려도 총계는 잘리지 않는다', async () => {
@@ -149,17 +161,35 @@ describe('summarizeNearby', () => {
       '이 테스트는 총계 > limit인 지점을 전제한다. 데이터가 바뀌었으면 기준점을 조정하라.',
     )
   })
+
+  it('소분류 분포는 사람이 아는 이름으로 나온다', async () => {
+    const s = await summarizeNearby({ ...BUPYEONG, radius: 500, group: 'sub', topN: 30 })
+    const names = s.breakdown.map((r) => r.name)
+    // 대분류('소매', '음식')만 나오면 창업자가 판단에 쓸 수 없다.
+    assert.ok(
+      names.some((n) => ['편의점', '미용실', '카페', '노래방', '약국'].includes(n)),
+      `구체 업종이 하나도 없다: ${names.slice(0, 10).join(', ')}`,
+    )
+    // 소분류 코드는 6자다
+    assert.ok(s.breakdown.every((r) => r.code.length === 6), '소분류 코드가 6자가 아니다')
+  })
 })
 
 describe('업종 접두어 필터', () => {
   it('대분류로 거르면 그 업종만 남고, 개수가 무필터 집계와 맞는다', async () => {
-    const all = await summarizeNearby({ ...BUPYEONG, radius: 500 })
-    const food = all.byTopIndustry.find((r) => r.name === '음식')
+    const all = await summarizeNearby({ ...BUPYEONG, radius: 500, group: 'top', topN: 50 })
+    const food = all.breakdown.find((r) => r.name === '음식')
     assert.ok(food, '부평역 반경 500m에 음식 업종이 없다')
 
-    const filtered = await summarizeNearby({ ...BUPYEONG, radius: 500, industry: food.code })
-    assert.equal(filtered.byTopIndustry.length, 1)
-    assert.equal(filtered.byTopIndustry[0].code, food.code)
+    const filtered = await summarizeNearby({
+      ...BUPYEONG,
+      radius: 500,
+      industry: food.code,
+      group: 'top',
+      topN: 50,
+    })
+    assert.equal(filtered.breakdown.length, 1)
+    assert.equal(filtered.breakdown[0].code, food.code)
     assert.equal(filtered.total, food.count)
   })
 
@@ -187,7 +217,7 @@ describe('업종 접두어 필터', () => {
   it('없는 업종 코드는 빈 결과를 준다 (에러가 아니다)', async () => {
     const r = await summarizeNearby({ ...BUPYEONG, radius: 500, industry: 'Z9' })
     assert.equal(r.total, 0)
-    assert.deepEqual(r.byTopIndustry, [])
+    assert.deepEqual(r.breakdown, [])
   })
 })
 

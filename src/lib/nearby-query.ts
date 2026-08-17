@@ -27,6 +27,9 @@ export const nearbyQuerySchema = z.object({
 
   // 잘릴 때 무엇을 남길지. 자세한 이유는 places.ts의 NearbyParams 주석 참고.
   order: z.enum(['distance', 'sample']).default('distance'),
+
+  // 업종 분포를 어느 단위로 묶을지. 기본은 사람이 아는 단위인 소분류.
+  group: z.enum(['top', 'sub']).default('sub'),
 })
 
 export type NearbyQuery = z.infer<typeof nearbyQuerySchema>

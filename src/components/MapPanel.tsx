@@ -28,7 +28,7 @@ type PlaceDetail = {
 type NearbyResponse = {
   total: number
   truncated: boolean
-  byTopIndustry: { code: string; name: string; count: number }[]
+  breakdown: { code: string; name: string; count: number }[]
   items: {
     placeId: string
     name: string
@@ -145,6 +145,7 @@ async function fetchNearby(
     industry?: string
     limit?: number
     order?: 'distance' | 'sample'
+    group?: 'top' | 'sub'
   },
   signal: AbortSignal,
 ): Promise<NearbyResponse> {
@@ -156,6 +157,7 @@ async function fetchNearby(
   if (q.industry) params.set('industry', q.industry)
   if (q.limit) params.set('limit', String(q.limit))
   if (q.order) params.set('order', q.order)
+  if (q.group) params.set('group', q.group)
 
   const res = await fetch(`/api/places/nearby?${params}`, { signal })
   if (!res.ok) throw new Error(`조회에 실패했습니다 (${res.status})`)
@@ -234,9 +236,19 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   //   목록 — 가까운 순. 사람이 훑는 용도라 25건이면 충분하다.
   //   마커 — 공간적으로 고른 표본. 가까운 순으로 뽑으면 밀집 지역에서
   //          중심만 채워지고 바깥이 비어 보인다.
+  // 분포를 어느 범위에서 셀지.
+  //   필터 없음   → 반경 안 전체의 소분류
+  //   대분류 선택 → 그 안의 소분류 (음식 → 백반/한정식, 카페, 치킨…)
+  //   소분류 선택 → 형제 업종을 계속 보여준다. 고른 것만 남으면 비교가 안 된다.
+  const breakdownScope = industry ? industry.slice(0, 2) : ''
+
   const contextQuery = useQuery({
-    queryKey: ['nearby', center.lon, center.lat, radius, '', 1, 'distance'],
-    queryFn: ({ signal }) => fetchNearby({ ...center, radius, limit: 1 }, signal),
+    queryKey: ['nearby', center.lon, center.lat, radius, breakdownScope, 1, 'distance', 'sub'],
+    queryFn: ({ signal }) =>
+      fetchNearby(
+        { ...center, radius, industry: breakdownScope || undefined, limit: 1, group: 'sub' },
+        signal,
+      ),
   })
 
   const listQuery = useQuery({
@@ -415,8 +427,11 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   }, [ready, markers, selectedId])
 
   const appKey = process.env.NEXT_PUBLIC_KAKAO_MAP_KEY
-  const max = context?.byTopIndustry[0]?.count ?? 0
-  const selected = industries.find((i) => i.code === industry)
+  const max = context?.breakdown[0]?.count ?? 0
+  // 대분류는 select에서, 소분류는 분포 목록에서 고른다. 둘 다 같은 industry 값을 쓴다.
+  const selected =
+    industries.find((i) => i.code === industry) ??
+    context?.breakdown.find((b) => b.code === industry)
 
   return (
     <main className="relative h-full w-full">
@@ -499,10 +514,15 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
             <label htmlFor="industry" className="mb-2 block text-xs font-medium tracking-wide text-muted">
               업종
             </label>
+            {/* select는 큰 단위, 아래 분포 목록은 세부 업종. 소분류를 고르면
+                select에는 그 상위 대분류가 표시돼 둘이 어긋나지 않는다. */}
             <select
               id="industry"
-              value={industry}
-              onChange={(e) => setIndustry(e.target.value)}
+              value={breakdownScope}
+              onChange={(e) => {
+                setSelectedId(null)
+                setIndustry(e.target.value)
+              }}
               className="w-full rounded border border-line bg-raised px-3 py-1.5 text-sm text-paper"
             >
               <option value="">전체 업종</option>
@@ -640,13 +660,16 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
                 )}
               </div>
 
-              {context && context.byTopIndustry.length > 0 && (
+              {context && context.breakdown.length > 0 && (
                 <div className="border-t border-line px-5 py-4">
-                  <h2 className="mb-3 text-xs font-medium tracking-wide text-muted">
-                    주변 업종 구성
+                  <h2 className="mb-1 text-xs font-medium tracking-wide text-muted">
+                    {breakdownScope
+                      ? `${industries.find((i) => i.code === breakdownScope)?.name ?? ''} 안에서 많은 업종`
+                      : '주변에 많은 업종'}
                   </h2>
+                  <p className="mb-3 text-xs text-muted/70">눌러서 그 업종만 보기</p>
                   <ul className="space-y-px">
-                    {context.byTopIndustry.map((row) => {
+                    {context.breakdown.map((row) => {
                       const on = industry === row.code
                       const share = max ? row.count / max : 0
                       return (

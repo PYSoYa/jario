@@ -196,20 +196,33 @@ export async function findNearbyPlaces(p: NearbyParams): Promise<NearbyPlace[]> 
 }
 
 /**
- * 반경 내 총 업소 수와 대분류별 분포.
+ * 반경 내 총 업소 수와 업종별 분포.
  *
  * 목록과 따로 세는 이유: 목록은 LIMIT이 걸려 있어서 items.length로는
  * 실제 밀집도를 알 수 없다. "이 자리 반경 500m에 몇 개"가 이 서비스의 답이므로
  * 잘리지 않은 수를 따로 구한다.
+ *
+ * group:
+ *   sub — 소분류(편의점·미용실·카페…). 기본값이자 사람이 실제로 아는 단위다.
+ *   top — 대분류(소매·음식…). 행정 분류라 "소매 994곳"처럼 판단에 쓸 수 없는
+ *         숫자가 나오므로, 상권 구성을 크게 훑을 때만 쓴다.
  */
 export async function summarizeNearby(
-  p: Omit<NearbyParams, 'limit'>,
-): Promise<{ total: number; byTopIndustry: IndustryCount[] }> {
-  const rows = await sql<{ code: string; name: string; count: string }[]>`
+  p: Omit<NearbyParams, 'limit' | 'order'> & { group?: 'top' | 'sub'; topN?: number },
+): Promise<{ total: number; breakdown: IndustryCount[] }> {
+  const bySub = (p.group ?? 'sub') === 'sub'
+  const topN = p.topN ?? 15
+
+  const rows = await sql<{ code: string; name: string; count: string; total: string }[]>`
     WITH center AS (
       SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g
     )
-    SELECT top.code, top.name, count(*)::text AS count
+    SELECT
+      ${bySub ? sql`sub.code` : sql`top.code`} AS code,
+      ${bySub ? sql`sub.name` : sql`top.name`} AS name,
+      count(*)::text AS count,
+      -- 윈도 함수는 LIMIT보다 먼저 계산된다. 잘라내기 전 전체 합이 담긴다.
+      sum(count(*)) OVER ()::text AS total
     FROM place p
     CROSS JOIN center
     JOIN industry sub ON sub.code = p.industry_code
@@ -217,18 +230,14 @@ export async function summarizeNearby(
     JOIN industry top ON top.code = mid.parent_code
     WHERE ST_DWithin(p.geom, center.g, ${p.radius})
       ${industryFilter(p.industry)}
-    GROUP BY top.code, top.name
-    ORDER BY count(*) DESC
+    GROUP BY 1, 2
+    ORDER BY count(*) DESC, 2
+    LIMIT ${topN}
   `
 
-  const byTopIndustry = rows.map((r) => ({
-    code: r.code,
-    name: r.name,
-    count: Number(r.count),
-  }))
-
   return {
-    total: byTopIndustry.reduce((sum, r) => sum + r.count, 0),
-    byTopIndustry,
+    // 결과가 없으면 행 자체가 없어서 total을 꺼낼 곳도 없다.
+    total: rows.length > 0 ? Number(rows[0].total) : 0,
+    breakdown: rows.map((r) => ({ code: r.code, name: r.name, count: Number(r.count) })),
   }
 }
