@@ -141,6 +141,28 @@ function formatRadius(m: number) {
   return m >= 1000 ? `${m / 1000}km` : `${m}m`
 }
 
+type SpotResponse = NearbyResponse & {
+  industries: Industry[]
+  markers: NearbyResponse['items']
+}
+
+/** 한 자리를 분석하는 데 필요한 것을 한 번에 받는다. */
+async function fetchSpot(
+  q: { lon: number; lat: number; radius: number; industry?: string },
+  signal: AbortSignal,
+): Promise<SpotResponse> {
+  const params = new URLSearchParams({
+    lon: String(q.lon),
+    lat: String(q.lat),
+    radius: String(q.radius),
+  })
+  if (q.industry) params.set('industry', q.industry)
+
+  const res = await fetch(`/api/spot?${params}`, { signal })
+  if (!res.ok) throw new Error(`조회에 실패했습니다 (${res.status})`)
+  return res.json()
+}
+
 async function fetchNearby(
   q: {
     lon: number
@@ -206,7 +228,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   )
 }
 
-export default function MapPanel({ industries }: { industries: Industry[] }) {
+export default function MapPanel() {
   const mapRef = useRef<HTMLDivElement>(null)
   const map = useRef<kakao.maps.Map | null>(null)
   const circle = useRef<kakao.maps.Circle | null>(null)
@@ -355,24 +377,13 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   //   소분류 선택 → 형제 업종을 계속 보여준다. 고른 것만 남으면 비교가 안 된다.
   const breakdownScope = industry ? industry.slice(0, 2) : ''
 
-  const contextQuery = useQuery({
-    queryKey: ['nearby', center.lon, center.lat, radius, breakdownScope, 1, 'distance', 'sub'],
+  // 분포·목록·마커·업종목록을 한 번에 받는다. 예전에는 조회를 세 번 보냈는데,
+  // 병렬이라 벽시계 시간은 최댓값이었지만 서버리스 호출이 3번이라
+  // 콜드 스타트를 맞을 확률도 3배였고 커넥션도 3번 잡았다.
+  const spotQuery = useQuery({
+    queryKey: ['spot', center.lon, center.lat, radius, industry],
     queryFn: ({ signal }) =>
-      fetchNearby(
-        { ...center, radius, industry: breakdownScope || undefined, limit: 1, group: 'sub' },
-        signal,
-      ),
-  })
-
-  const listQuery = useQuery({
-    queryKey: ['nearby', center.lon, center.lat, radius, industry, 25, 'distance'],
-    queryFn: ({ signal }) => fetchNearby({ ...center, radius, industry, limit: 25 }, signal),
-  })
-
-  const markersQuery = useQuery({
-    queryKey: ['nearby', center.lon, center.lat, radius, industry, 500, 'sample'],
-    queryFn: ({ signal }) =>
-      fetchNearby({ ...center, radius, industry, limit: 500, order: 'sample' }, signal),
+      fetchSpot({ ...center, radius, industry: industry || undefined }, signal),
   })
 
   const detailQuery = useQuery({
@@ -397,11 +408,13 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
     enabled: detail !== null,
   })
 
-  const context = contextQuery.data ?? null
-  const focused = listQuery.data ?? null
-  const markers = markersQuery.data ?? null
-  const loading = contextQuery.isFetching || listQuery.isFetching
-  const error = contextQuery.error ?? listQuery.error
+  const spot = spotQuery.data ?? null
+  const industries = spot?.industries ?? []
+  const context = spot
+  const focused = spot
+  const markers = spot ? { ...spot, items: spot.markers } : null
+  const loading = spotQuery.isFetching
+  const error = spotQuery.error
 
   const initMap = useCallback(() => {
     if (!mapRef.current || map.current) return

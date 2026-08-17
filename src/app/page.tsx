@@ -1,14 +1,12 @@
 import MapPanel from '@/components/MapPanel'
-import { sql } from '@/lib/db'
 
-// 업종 목록을 DB에서 읽으므로 빌드 시점에 미리 렌더할 수 없다.
-// (Vercel 빌드 환경에는 DB가 없다)
-export const dynamic = 'force-dynamic'
-
-export default async function Home() {
-  const industries = await sql<{ code: string; name: string }[]>`
-    SELECT code, name FROM industry WHERE level = 1 ORDER BY name
-  `
-
-  return <MapPanel industries={industries.map((i) => ({ code: i.code, name: i.name }))} />
+/**
+ * 정적 셸이다. DB를 건드리지 않는다.
+ *
+ * 예전에는 업종 목록을 여기서 읽느라 force-dynamic 이었다. 분기마다만 바뀌는
+ * 10행을 매 요청마다 DB에 다녀왔고, 그만큼 TTFB와 첫 페인트가 늦어졌다.
+ * 업종 목록은 어차피 한 번은 나가는 /api/spot 응답에 얹어 보낸다.
+ */
+export default function Home() {
+  return <MapPanel />
 }
