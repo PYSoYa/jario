@@ -412,7 +412,9 @@ export default function MapPanel() {
   const industries = spot?.industries ?? []
   const context = spot
   const focused = spot
-  const markers = spot ? { ...spot, items: spot.markers } : null
+  // 배열을 그대로 쓴다. 렌더마다 객체를 새로 만들면 참조가 바뀌어
+  // 마커 effect가 매번 돌고 마커 500개를 다시 생성한다.
+  const markers = spot?.markers ?? null
   const loading = spotQuery.isFetching
   const error = spotQuery.error
 
@@ -536,7 +538,7 @@ export default function MapPanel() {
 
     clusterer.current.clear()
     clusterer.current.addMarkers(
-      markers.items.map((p) => {
+      markers.map((p) => {
         const isSelected = p.placeId === selectedId
         const marker = new kakao.maps.Marker({
           position: new kakao.maps.LatLng(p.lat, p.lon),
@@ -897,9 +899,9 @@ export default function MapPanel() {
                   반경 <span className="measure text-paper">{formatRadius(radius)}</span> 안의{' '}
                   {selected ? <span className="text-paper">{selected.name}</span> : '모든'} 업소
                 </p>
-                {markers?.truncated && (
+                {spot?.truncated && markers && (
                   <p className="mt-2 text-xs leading-snug text-muted">
-                    지도에는 이 중 <span className="measure">{markers.items.length}</span>곳을 고르게
+                    지도에는 이 중 <span className="measure">{markers.length}</span>곳을 고르게
                     추려 표시합니다.
                   </p>
                 )}
