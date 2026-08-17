@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import Script from 'next/script'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import DongRanking from './DongRanking'
 
 type Industry = { code: string; name: string }
@@ -165,6 +165,34 @@ async function fetchNearby(
   return res.json()
 }
 
+/**
+ * 서랍이 멈추는 높이. 화면 높이 대비 비율이다.
+ *   요약  — 숫자 한 줄만 남기고 지도를 다 보여준다
+ *   절반  — 지도와 목록을 같이 본다
+ *   전체  — 목록·분포를 훑는다
+ */
+const SNAPS = [0.075, 0.55, 0.92] as const
+
+/**
+ * 뷰포트가 좁은가. effect에서 setState 하지 않으려고 외부 스토어로 구독한다.
+ * (React 19의 set-state-in-effect 규칙에 걸리지 않는다)
+ */
+function useIsNarrow() {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia('(max-width: 767px)')
+      mq.addEventListener('change', onChange)
+      window.addEventListener('resize', onChange)
+      return () => {
+        mq.removeEventListener('change', onChange)
+        window.removeEventListener('resize', onChange)
+      }
+    },
+    () => window.matchMedia('(max-width: 767px)').matches,
+    () => false, // 서버에서는 알 수 없다. 데스크톱 레이아웃으로 렌더한다.
+  )
+}
+
 /** 상세 정보 한 줄. 라벨 폭을 고정해 값이 세로로 정렬되게 한다. */
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -190,11 +218,19 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   const [radius, setRadius] = useState<Radius>(500)
   const [industry, setIndustry] = useState('')
   const sheetRef = useRef<HTMLElement>(null)
-  const [sheetOpen, setSheetOpen] = useState(true)
+  const isNarrow = useIsNarrow()
+  const [snap, setSnap] = useState(1) // 절반에서 시작한다
+  const [dragH, setDragH] = useState<number | null>(null)
+  const grab = useRef<{ startY: number; startH: number; moved: boolean } | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [view, setView] = useState<'spot' | 'dong'>('spot')
+
+  const heightFor = (i: number) =>
+    typeof window === 'undefined' ? 0 : Math.round(window.innerHeight * SNAPS[i])
+  const sheetHeight = dragH ?? heightFor(snap)
 
   /**
    * 고른 자리가 하단 시트에 가리지 않도록 지도를 밀어 올린다.
@@ -212,6 +248,57 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
     if (window.matchMedia('(min-width: 768px)').matches) return
     m.panBy(0, sheet.getBoundingClientRect().height / 2)
   }, [])
+
+  /** 서랍 높이가 바뀌면 가려지는 영역도 달라진다. 중심을 다시 잡고 새 높이로 보정한다. */
+  const resettle = useCallback(() => {
+    window.setTimeout(() => {
+      map.current?.relayout()
+      map.current?.setCenter(new window.kakao.maps.LatLng(center.lat, center.lon))
+      keepVisible()
+    }, 230)
+  }, [center, keepVisible])
+
+  const gotoSnap = useCallback(
+    (i: number) => {
+      setSnap(i)
+      resettle()
+    },
+    [resettle],
+  )
+
+  const onGrabStart = (e: React.PointerEvent) => {
+    if (!isNarrow) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    grab.current = { startY: e.clientY, startH: sheetHeight, moved: false }
+  }
+
+  const onGrabMove = (e: React.PointerEvent) => {
+    const g = grab.current
+    if (!g) return
+    const dy = g.startY - e.clientY // 위로 끌면 커진다
+    if (Math.abs(dy) > 4) g.moved = true
+    setDragH(Math.min(heightFor(SNAPS.length - 1), Math.max(heightFor(0), g.startH + dy)))
+  }
+
+  const onGrabEnd = () => {
+    const g = grab.current
+    if (!g) return
+    grab.current = null
+    const h = dragH ?? g.startH
+    setDragH(null)
+
+    if (!g.moved) {
+      // 움직이지 않았으면 탭이다. 다음 단계로 넘긴다.
+      gotoSnap((snap + 1) % SNAPS.length)
+      return
+    }
+    // 놓은 높이에서 가장 가까운 단계로 붙인다.
+    let best = 0
+    for (let i = 1; i < SNAPS.length; i++) {
+      if (Math.abs(heightFor(i) - h) < Math.abs(heightFor(best) - h)) best = i
+    }
+    gotoSnap(best)
+  }
 
   /**
    * 현재 위치로 이동한다.
@@ -482,53 +569,82 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
         </div>
       )}
 
-      {/* 분석 패널 — 데스크톱은 왼쪽, 모바일은 아래 시트 */}
+      {/* 분석 패널 — 데스크톱은 왼쪽 고정, 모바일은 끌어올리는 서랍 */}
       <section
         ref={sheetRef}
-        className={`absolute inset-x-0 bottom-0 z-10 flex flex-col overflow-hidden border-t border-line bg-ink/95 backdrop-blur transition-[max-height] duration-200
-                    ${sheetOpen ? 'max-h-[62svh]' : 'max-h-[3.5rem]'}
-                    md:inset-y-4 md:left-4 md:right-auto md:max-h-none md:w-[23rem] md:rounded-lg md:border`}
+        style={isNarrow ? { height: sheetHeight } : undefined}
+        className={`absolute inset-x-0 bottom-0 z-10 flex flex-col overflow-hidden border-t border-line bg-ink/95 backdrop-blur
+                    ${dragH === null ? 'transition-[height] duration-200' : ''}
+                    md:inset-y-4 md:left-4 md:right-auto md:h-auto md:w-[23rem] md:rounded-lg md:border`}
         aria-label="상권 분석"
       >
-        {/* 모바일 전용 손잡이. 시트가 화면의 60%를 덮어서 지도를 보려면 접을 수 있어야 한다. */}
-        <button
-          type="button"
-          onClick={() => {
-            setSheetOpen((v) => !v)
-            // 시트 높이가 바뀌면 보정값도 달라진다. 중심을 다시 잡고 새 높이로 보정한다.
-            // 트랜지션(200ms)이 끝난 뒤 실제 높이를 읽어야 한다.
-            window.setTimeout(() => {
-              map.current?.setCenter(new window.kakao.maps.LatLng(center.lat, center.lon))
-              keepVisible()
-            }, 230)
+        {/* 서랍 손잡이. 끌면 따라오고, 놓으면 가까운 단계로 붙는다. 탭하면 다음 단계.
+            touch-none 이 없으면 브라우저 스크롤 제스처가 드래그를 가로챈다. */}
+        <div
+          onPointerDown={onGrabStart}
+          onPointerMove={onGrabMove}
+          onPointerUp={onGrabEnd}
+          onPointerCancel={onGrabEnd}
+          role="slider"
+          tabIndex={0}
+          aria-label="패널 높이"
+          aria-valuemin={0}
+          aria-valuemax={SNAPS.length - 1}
+          aria-valuenow={snap}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowUp') gotoSnap(Math.min(snap + 1, SNAPS.length - 1))
+            if (e.key === 'ArrowDown') gotoSnap(Math.max(snap - 1, 0))
           }}
-          aria-expanded={sheetOpen}
-          className="flex shrink-0 items-center justify-between gap-3 px-5 pb-1 pt-2.5 text-left md:hidden"
+          className="shrink-0 cursor-grab touch-none select-none px-5 pb-1.5 pt-2 active:cursor-grabbing md:hidden"
         >
-          <span className="flex items-baseline gap-1.5">
-            <span className="measure text-lg font-semibold text-paper">
-              {focused ? focused.total.toLocaleString('ko-KR') : '—'}
-            </span>
+          <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-line" />
+          {/* 요약 상태에서는 내용이 안 보이므로 숫자를 여기 둔다.
+              펼친 상태에서는 본문에 같은 숫자가 있어 중복이다. */}
+          <div className="flex items-baseline justify-between gap-3">
+            {snap === 0 ? (
+              <span className="flex items-baseline gap-1.5">
+                <span className="measure text-lg font-semibold text-paper">
+                  {focused ? focused.total.toLocaleString('ko-KR') : '—'}
+                </span>
+                <span className="text-xs text-muted">
+                  곳 · 반경 <span className="measure">{formatRadius(radius)}</span>
+                  {selected ? ` · ${selected.name}` : ''}
+                </span>
+              </span>
+            ) : (
+              <span className="text-xs text-muted">끌어서 높이 조절</span>
+            )}
             <span className="text-xs text-muted">
-              곳 · 반경 <span className="measure">{formatRadius(radius)}</span>
-              {selected ? ` · ${selected.name}` : ''}
+              {snap === SNAPS.length - 1 ? '내리기' : '올리기'}
             </span>
-          </span>
-          <span className="text-xs text-muted">{sheetOpen ? '접기 ▾' : '펼치기 ▴'}</span>
-        </button>
+          </div>
+        </div>
 
-        <header className="shrink-0 border-b border-line px-5 py-4">
-          <h1 className="text-lg font-semibold tracking-tight text-paper">
-            jario<span className="ml-2 text-sm font-normal text-muted">자리</span>
-          </h1>
-          <p className="mt-1 text-sm leading-snug text-muted">
+        {/* 모바일에서는 제목·설명이 세로 공간을 크게 잡아먹는다. 쓰는 중에는 필요 없는 정보라
+            좁은 화면에서는 줄이고, 위치 버튼만 남긴다. */}
+        <header className="shrink-0 border-b border-line px-5 pb-3 pt-1 md:py-4">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-base font-semibold tracking-tight text-paper md:text-lg">
+              jario<span className="ml-2 text-sm font-normal text-muted">자리</span>
+            </h1>
+            <button
+              type="button"
+              onClick={() => locate({ silent: false })}
+              disabled={locating}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-muted hover:text-paper disabled:opacity-50 md:hidden"
+            >
+              <span aria-hidden="true">◎</span>
+              {locating ? '찾는 중' : '내 위치'}
+            </button>
+          </div>
+          <p className="mt-1 hidden text-sm leading-snug text-muted md:block">
             지도를 눌러 자리를 고르면 반경 안의 경쟁 밀도를 셉니다.
           </p>
           <button
             type="button"
             onClick={() => locate({ silent: false })}
             disabled={locating}
-            className="mt-3 inline-flex items-center gap-1.5 rounded border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-muted hover:text-paper disabled:opacity-50"
+            className="mt-3 hidden items-center gap-1.5 rounded border border-line px-2.5 py-1 text-xs text-muted transition-colors hover:border-muted hover:text-paper disabled:opacity-50 md:inline-flex"
           >
             <span aria-hidden="true">◎</span>
             {locating ? '위치 찾는 중' : '내 위치로'}
@@ -540,7 +656,26 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
           )}
         </header>
 
-        <div className="shrink-0 space-y-3 border-b border-line px-5 py-4">
+        {/* 좁은 화면에서는 필터도 접어둔다. 늘 보일 필요는 없고, 그만큼 내용이 넓어진다. */}
+        <div className="shrink-0 border-b border-line md:hidden">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            aria-expanded={filtersOpen}
+            className="flex w-full items-center justify-between gap-3 px-5 py-2.5 text-left"
+          >
+            <span className="min-w-0 truncate text-xs text-muted">
+              반경 <span className="measure text-paper">{formatRadius(radius)}</span>
+              <span className="mx-1.5 text-muted/50">·</span>
+              <span className="text-paper">{selected?.name ?? '전체 업종'}</span>
+            </span>
+            <span className="shrink-0 text-xs text-muted">{filtersOpen ? '닫기 ▾' : '필터 ▴'}</span>
+          </button>
+        </div>
+
+        <div
+          className={`${filtersOpen ? 'block' : 'hidden'} shrink-0 space-y-3 border-b border-line px-5 pb-4 pt-1 md:block md:py-4`}
+        >
           <fieldset>
             <legend className="mb-2 text-xs font-medium tracking-wide text-muted">반경</legend>
             <div className="flex gap-1.5">
