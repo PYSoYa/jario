@@ -48,11 +48,14 @@ type Radius = (typeof RADII)[number]
 /** 부평역. 내 위치를 못 쓰거나 데이터 범위 밖일 때의 기준점. */
 const START = { lat: 37.4894, lon: 126.7244 }
 
+/** 데이터가 있는 지역. 문구에 그대로 쓰이므로 한 곳에서 관리한다. */
+const COVERAGE_LABEL = '서울·인천'
+
 /**
- * 적재된 데이터(인천)의 실제 좌표 범위. 실사에서 얻은 값에 여유를 조금 뒀다.
+ * 적재된 데이터의 실제 좌표 범위(서울·인천)에 여유를 조금 뒀다.
  * 이 밖에서는 결과가 0이 나오는 게 정상이므로, 빈 화면 대신 이유를 말해준다.
  */
-const COVERAGE = { minLon: 124.5, maxLon: 126.9, minLat: 36.8, maxLat: 38.05 }
+const COVERAGE = { minLon: 124.5, maxLon: 127.25, minLat: 36.8, maxLat: 38.05 }
 
 function withinCoverage(lon: number, lat: number) {
   return (
@@ -321,7 +324,9 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
 
         // 범위 밖이면 옮기지 않는다. 옮겨봐야 0곳만 나오고 왜인지 알 수 없다.
         if (!withinCoverage(lon, lat)) {
-          setNotice('현재 위치가 인천 밖입니다. 지금은 인천 데이터만 있어 부평역을 기준으로 보여줍니다.')
+          setNotice(
+            `현재 위치가 ${COVERAGE_LABEL} 밖입니다. 지금은 ${COVERAGE_LABEL} 데이터만 있어 부평역을 기준으로 보여줍니다.`,
+          )
           return
         }
 
@@ -887,7 +892,8 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
                 )}
                 {focused?.total === 0 && (
                   <p className="mt-2 text-xs leading-snug text-muted">
-                    이 자리 주변에는 등록된 업소가 없습니다. 인천 밖이라면 아직 데이터가 없는 지역입니다.
+                    이 자리 주변에는 등록된 업소가 없습니다. {COVERAGE_LABEL} 밖이라면 아직
+                    데이터가 없는 지역입니다.
                   </p>
                 )}
               </div>

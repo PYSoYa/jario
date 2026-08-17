@@ -67,27 +67,34 @@ SELECT
   NULLIF(btrim(건물명), ''),
 
   NULLIF(btrim(층정보), ''),
-  -- 층 정규화. 실사에서 확인된 비숫자 값: '지'(823), 'B1'(120), 'B2', 'B3',
-  -- 'B02', 'B08', 'B105', '반'.
-  CASE
-    -- 평범한 숫자 층. 말이 안 되는 값은 버린다(CHECK 제약에 걸리기 전에).
-    WHEN btrim(층정보) ~ '^-?[0-9]+$'
-      THEN NULLIF(
-             CASE WHEN btrim(층정보)::int BETWEEN -10 AND 200
-                  THEN btrim(층정보)::int END, NULL)
-    -- 'B1' → -1, 'B02' → -2. 두 자리까지만 인정한다.
-    -- 'B105'는 층이 아니라 호실번호로 보이므로 여기서 걸러진다.
-    WHEN btrim(층정보) ~ '^[Bb]0*[0-9]{1,2}$'
-      THEN -(regexp_replace(btrim(층정보), '^[Bb]0*', '')::int)
-    -- '지' = 지하. 몇 층인지는 알 수 없어 지하1층으로 본다.
-    WHEN btrim(층정보) = '지' THEN -1
-    -- '반'(반지하) 등은 층수로 환산할 근거가 없다. 원문만 floor_raw에 남는다.
-    ELSE NULL
-  END,
+  -- 범위를 벗어나면 층이 아니라 호실번호다. 숫자 층과 지하 표기 양쪽에
+  -- 같은 가드를 건다.
+  --
+  -- 처음에는 숫자 층에만 범위를 걸고 지하는 두 자리까지 무조건 받았는데,
+  -- 서울 데이터에서 B17·B26·B40이 나와 CHECK 제약에 걸렸다. 국내 최심도는
+  -- B7~B8 수준이라 지하 40층은 존재하지 않는다 — 호실번호다.
+  CASE WHEN floor_candidate BETWEEN -10 AND 200 THEN floor_candidate END,
 
   경도::double precision,
   위도::double precision
-FROM staging_place;
+FROM (
+  SELECT
+    s.*,
+    -- 실사에서 확인된 비숫자 표기: '지'(지하), 'B1'~'B5', 'B02', 'B08',
+    -- '반'·'반지층'(반지하), 그리고 'B103'·'15015' 같은 호실번호.
+    CASE
+      WHEN btrim(층정보) ~ '^-?[0-9]+$'
+        THEN btrim(층정보)::int
+      -- 'B1' → -1, 'B02' → -2
+      WHEN btrim(층정보) ~ '^[Bb]0*[0-9]{1,2}$'
+        THEN -(regexp_replace(btrim(층정보), '^[Bb]0*', '')::int)
+      -- '지' = 지하. 몇 층인지 알 수 없어 지하1층으로 본다.
+      WHEN btrim(층정보) = '지' THEN -1
+      -- '반'·'반지층'은 층수로 환산할 근거가 없다. 원문만 floor_raw에 남는다.
+      ELSE NULL
+    END AS floor_candidate
+  FROM staging_place s
+) s;
 
 -- 통계가 없으면 플래너가 새 인덱스를 안 쓸 수 있다. 성능 측정 전에 갱신한다.
 ANALYZE industry;

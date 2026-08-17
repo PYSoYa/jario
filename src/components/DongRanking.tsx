@@ -89,7 +89,7 @@ export default function DongRanking({
   return (
     <div className="px-5 py-4">
       <p className="text-sm leading-snug text-muted">
-        인천 전체에서 <span className="text-paper">{industryName}</span>
+        서울·인천 전체에서 <span className="text-paper">{industryName}</span>
         {josa(industryName, '은는')} 업소{' '}
         <span className="measure text-paper">100</span>곳당{' '}
         <span className="measure text-paper">{(data.baseShare * 100).toFixed(1)}</span>곳입니다. 이
