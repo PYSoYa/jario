@@ -1,0 +1,13 @@
+# Vercel CLI는 .gitignore가 아니라 이 파일을 본다.
+# 이게 없으면 data/ 의 원본 CSV(수백 MB)까지 업로드하려다
+# "File size limit exceeded (100 MB)" 로 배포가 실패한다.
+
+# 공공데이터 원본. 빌드에도 런타임에도 쓰이지 않는다.
+data
+
+# 로컬 DB·적재·검증 도구. 배포본과 무관하다.
+db
+scripts
+tests
+docker-compose.yml
+.github
