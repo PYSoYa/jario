@@ -19,6 +19,11 @@ async function main() {
     throw new Error('DATABASE_URL이 없습니다.')
   }
 
+  // 어디에 적용하는지 먼저 보여준다. 원격을 지정한 줄 알았는데 로컬이었던
+  // (또는 그 반대인) 상황을 막는다. 비밀번호는 찍지 않는다.
+  const target = new URL(connectionString)
+  console.log(`대상: ${target.hostname}:${target.port || 5432}${target.pathname}\n`)
+
   const sql = postgres(connectionString, {
     max: 1,
     // 기본 핸들러는 NOTICE를 객체째로 덤프해서 출력이 지저분해진다.
