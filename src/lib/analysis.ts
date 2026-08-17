@@ -54,17 +54,22 @@ export async function analyzeDongs(p: {
       base_share: string
     }[]
   >`
-    WITH dong AS (
-      SELECT
-        adm_dong_code AS code,
-        adm_dong_name AS name,
-        sigungu_name  AS sigungu,
-        count(*)                                                       AS total,
-        count(*) FILTER (WHERE industry_code LIKE ${p.industry + '%'}) AS target,
-        avg(lon) AS fallback_lon,
-        avg(lat) AS fallback_lat
+    /*
+     * 동별 전체 업소 수는 dong_stat(585행)에서 읽는다.
+     * 예전에는 여기서 place 691,087행을 통째로 집계했는데, 업종과 무관하고
+     * 분기 스냅샷이라 변하지도 않는 값이었다. 그 전체 집계 때문에 이 API가
+     * 30~60초 걸렸다.
+     *
+     * 업종에 걸린 부분만 place에서 읽고, 그것도 커버링 인덱스로 index-only scan이
+     * 되게 필요한 컬럼(행정동·좌표)만 가져온다.
+     */
+    WITH tgt AS (
+      SELECT adm_dong_code AS code, lon, lat
       FROM place
-      GROUP BY 1, 2, 3
+      WHERE industry_code LIKE ${p.industry + '%'}
+    ),
+    per_dong AS (
+      SELECT code, count(*) AS target FROM tgt GROUP BY 1
     ),
     /*
      * 동을 대표하는 지점 = 그 업종이 가장 빽빽한 곳.
@@ -77,19 +82,16 @@ export async function analyzeDongs(p: {
      * 반경(500m)보다 작아서, 인접한 두 밀집 칸 사이의 지점이 어느 한 칸의 중심보다
      * 나을 수 있다(송도4동에서 실제로 그랬다). 3×3 이웃을 합쳐 반경에 가깝게 본 뒤,
      * 그 이웃 안 업소들의 무게중심을 쓴다.
-     *
-     * 업소마다 반경 질의를 도는 방식보다 훨씬 싸다(집계 1회 + 동 안에서만 자기조인).
      */
     cell AS (
       SELECT
-        adm_dong_code AS code,
+        code,
         round(lon / 0.005) AS gx,
         round(lat / 0.004) AS gy,
         count(*) AS c,
         sum(lon) AS slon,
         sum(lat) AS slat
-      FROM place
-      WHERE industry_code LIKE ${p.industry + '%'}
+      FROM tgt
       GROUP BY 1, 2, 3
     ),
     smoothed AS (
@@ -112,21 +114,22 @@ export async function analyzeDongs(p: {
     ),
     base AS (
       SELECT
-        count(*) FILTER (WHERE industry_code LIKE ${p.industry + '%'})::numeric
-          / NULLIF(count(*), 0) AS share
-      FROM place
+        (SELECT coalesce(sum(target), 0) FROM per_dong)::numeric
+          / NULLIF((SELECT sum(total) FROM dong_stat), 0) AS share
     )
     SELECT
       d.code, d.name, d.sigungu,
-      d.total::text, d.target::text,
-      (d.target::numeric / d.total)::text AS share,
-      ((d.target::numeric / d.total) / NULLIF(b.share, 0))::text AS lq,
-      -- 그 업종이 한 곳도 없는 동은 hotspot이 없으므로 전체 평균으로 되돌린다.
-      COALESCE(h.lon, d.fallback_lon) AS lon,
-      COALESCE(h.lat, d.fallback_lat) AS lat,
+      d.total::text,
+      COALESCE(p.target, 0)::text AS target,
+      (COALESCE(p.target, 0)::numeric / d.total)::text AS share,
+      ((COALESCE(p.target, 0)::numeric / d.total) / NULLIF(b.share, 0))::text AS lq,
+      -- 그 업종이 한 곳도 없는 동은 hotspot이 없으므로 동 전체 무게중심으로 되돌린다.
+      COALESCE(h.lon, d.lon) AS lon,
+      COALESCE(h.lat, d.lat) AS lat,
       b.share::text AS base_share
-    FROM dong d
+    FROM dong_stat d
     CROSS JOIN base b
+    LEFT JOIN per_dong p ON p.code = d.code
     LEFT JOIN hotspot h ON h.code = d.code
     WHERE d.total >= ${minTotal}
     ORDER BY lq DESC NULLS LAST, d.total DESC
