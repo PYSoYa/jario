@@ -189,10 +189,29 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
   const [center, setCenter] = useState(START)
   const [radius, setRadius] = useState<Radius>(500)
   const [industry, setIndustry] = useState('')
+  const sheetRef = useRef<HTMLElement>(null)
+  const [sheetOpen, setSheetOpen] = useState(true)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [view, setView] = useState<'spot' | 'dong'>('spot')
+
+  /**
+   * 고른 자리가 하단 시트에 가리지 않도록 지도를 밀어 올린다.
+   *
+   * 모바일에서는 패널이 화면 아래 60% 이상을 덮는다. 지도 중심에 마커를 두면
+   * 정작 내가 찍은 자리가 시트 뒤에 숨는다 — 자리를 고르는 도구인데 고른 자리가
+   * 안 보인다. 보이는 영역의 한가운데로 오도록 시트 높이의 절반만큼 보정한다.
+   * (조회에 쓰는 좌표는 그대로다. 화면만 옮긴다.)
+   */
+  const keepVisible = useCallback(() => {
+    const m = map.current
+    const sheet = sheetRef.current
+    if (!m || !sheet) return
+    // md 이상에서는 패널이 왼쪽에 있어 지도 중심을 가리지 않는다.
+    if (window.matchMedia('(min-width: 768px)').matches) return
+    m.panBy(0, sheet.getBoundingClientRect().height / 2)
+  }, [])
 
   /**
    * 현재 위치로 이동한다.
@@ -374,6 +393,8 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
     })
     circle.current.setMap(map.current)
 
+    keepVisible()
+
     // 새로 만들어야 측량 핑 애니메이션이 다시 재생된다.
     pin.current?.setMap(null)
     pin.current = new kakao.maps.CustomOverlay({
@@ -390,7 +411,7 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
         '</div>',
     })
     pin.current.setMap(map.current)
-  }, [ready, center, radius])
+  }, [ready, center, radius, keepVisible])
 
   // 지도 마커
   useEffect(() => {
@@ -463,10 +484,39 @@ export default function MapPanel({ industries }: { industries: Industry[] }) {
 
       {/* 분석 패널 — 데스크톱은 왼쪽, 모바일은 아래 시트 */}
       <section
-        className="absolute inset-x-0 bottom-0 z-10 flex max-h-[62svh] flex-col border-t border-line bg-ink/95 backdrop-blur
-                   md:inset-y-4 md:left-4 md:right-auto md:max-h-none md:w-[23rem] md:rounded-lg md:border"
+        ref={sheetRef}
+        className={`absolute inset-x-0 bottom-0 z-10 flex flex-col overflow-hidden border-t border-line bg-ink/95 backdrop-blur transition-[max-height] duration-200
+                    ${sheetOpen ? 'max-h-[62svh]' : 'max-h-[3.5rem]'}
+                    md:inset-y-4 md:left-4 md:right-auto md:max-h-none md:w-[23rem] md:rounded-lg md:border`}
         aria-label="상권 분석"
       >
+        {/* 모바일 전용 손잡이. 시트가 화면의 60%를 덮어서 지도를 보려면 접을 수 있어야 한다. */}
+        <button
+          type="button"
+          onClick={() => {
+            setSheetOpen((v) => !v)
+            // 시트 높이가 바뀌면 보정값도 달라진다. 중심을 다시 잡고 새 높이로 보정한다.
+            // 트랜지션(200ms)이 끝난 뒤 실제 높이를 읽어야 한다.
+            window.setTimeout(() => {
+              map.current?.setCenter(new window.kakao.maps.LatLng(center.lat, center.lon))
+              keepVisible()
+            }, 230)
+          }}
+          aria-expanded={sheetOpen}
+          className="flex shrink-0 items-center justify-between gap-3 px-5 pb-1 pt-2.5 text-left md:hidden"
+        >
+          <span className="flex items-baseline gap-1.5">
+            <span className="measure text-lg font-semibold text-paper">
+              {focused ? focused.total.toLocaleString('ko-KR') : '—'}
+            </span>
+            <span className="text-xs text-muted">
+              곳 · 반경 <span className="measure">{formatRadius(radius)}</span>
+              {selected ? ` · ${selected.name}` : ''}
+            </span>
+          </span>
+          <span className="text-xs text-muted">{sheetOpen ? '접기 ▾' : '펼치기 ▴'}</span>
+        </button>
+
         <header className="shrink-0 border-b border-line px-5 py-4">
           <h1 className="text-lg font-semibold tracking-tight text-paper">
             jario<span className="ml-2 text-sm font-normal text-muted">자리</span>

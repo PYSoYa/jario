@@ -16,6 +16,9 @@ declare namespace kakao.maps {
     getLevel(): number
     setLevel(level: number): void
     panTo(latlng: LatLng): void
+    /** 지도를 픽셀 단위로 이동한다. 화면 일부가 패널에 가릴 때 보정용. */
+    panBy(dx: number, dy: number): void
+    relayout(): void
   }
 
   class Size {
