@@ -14,6 +14,7 @@
     "db:psql": "docker exec -it jario-db psql -U jario -d jario",
     "db:check": "for f in db/checks/*.sql; do echo \"\\n══ $f\"; docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -f - < \"$f\" || exit 1; done",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.ts",
+    "db:remote:check": "node --env-file-if-exists=.env.local scripts/check-remote.ts",
     "data:inspect": "node scripts/inspect-csv.ts",
     "data:transform": "docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -f - < db/etl/transform.sql"
   },
@@ -32,6 +33,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
+    "supabase": "^2.114.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   },

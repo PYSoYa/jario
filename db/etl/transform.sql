@@ -5,6 +5,18 @@
 
 BEGIN;
 
+-- staging이 비어 있으면 아무것도 하지 않고 실패한다.
+-- 이게 없으면 place를 통째로 비운 뒤 0건을 넣고 "성공"으로 끝난다.
+-- 적재 공간을 아끼려고 staging을 비워두는 경우가 있어 실제로 밟기 쉬운 함정이다.
+DO $$
+DECLARE n bigint;
+BEGIN
+  SELECT count(*) INTO n FROM staging_place;
+  IF n = 0 THEN
+    RAISE EXCEPTION 'staging_place가 비어 있습니다. CSV를 먼저 COPY 하세요 (README의 "데이터 적재").';
+  END IF;
+END $$;
+
 -- place가 industry를 참조하므로 순서대로 비운다.
 TRUNCATE place;
 TRUNCATE industry CASCADE;

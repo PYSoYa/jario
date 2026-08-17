@@ -238,24 +238,47 @@ geography 거리 계산, 업종 접두어 매칭, 표본 추출이 전부 DB 안
 Vercel(앱) + Supabase(PostGIS).
 
 ```bash
-# 스키마 + 데이터를 원격에 올린다. 직접 연결(5432)을 쓴다.
-REMOTE_DATABASE_URL='postgresql://postgres:PW@db.xxx.supabase.co:5432/postgres' \
-  ./scripts/push-data.sh '소상공인시장진흥공단_상가(상권)정보_인천_202606.csv'
+./scripts/push-data.sh '소상공인시장진흥공단_상가(상권)정보_인천_202606.csv'
 ```
 
 psql을 로컬에 설치하지 않고 `jario-db` 컨테이너 안의 psql을 쓴다. CSV가 이미 `/data`로
-마운트돼 있어 파일을 옮기지 않고 컨테이너 → 원격으로 바로 스트리밍한다.
+마운트돼 있어 파일을 옮기지 않고 컨테이너 → 원격으로 바로 스트리밍한다(136,995건).
 되돌리기 어려운 작업이라 대상 호스트를 보여주고 확인을 받는다.
+
+### 어느 연결을 쓰는가
+
+Supabase는 세 가지 접속 경로를 주는데 셋 다 성격이 다르다.
+
+| 경로 | 포트 | 여기서의 용도 |
+|---|---|---|
+| 직접 연결 `db.<ref>.supabase.co` | 5432 | **못 씀** |
+| 세션 모드 풀러 | 5432 | 마이그레이션·`COPY` |
+| 트랜잭션 모드 풀러 | 6543 | 앱(Vercel) |
+
+**직접 연결은 IPv4 주소가 없다.** `db.<ref>.supabase.co`에는 AAAA 레코드만 있고 A 레코드가
+없다(IPv4는 유료 부가기능). IPv6가 나가는 환경이었는데도 Node의 `dns.lookup`(getaddrinfo)이
+`ENOTFOUND`로 실패했다 — `dns.resolve6`으로는 주소가 나온다. 그래서 관리 작업도 풀러를 쓴다.
+
+프로젝트가 `aws-0`인지 `aws-1`인지는 DNS로 알 수 없다(둘 다 존재한다). 실제로 붙어보면
+아닌 쪽은 `tenant/user ... not found`로 거절한다.
 
 ### 서버리스에서 조심한 것
 
-- **앱은 풀러(6543), 데이터 적재는 직접 연결(5432).** 서버리스 함수 인스턴스가 늘 때마다
-  DB에 직접 붙으면 Supabase 커넥션 한도를 금방 넘긴다. 반대로 트랜잭션 모드 풀러로는
-  `COPY`와 대형 트랜잭션이 안정적으로 돌지 않는다.
-- **풀러로 붙을 때 `prepare: false`.** 트랜잭션 모드에서는 prepared statement가 세션을
-  넘어 살아남지 못해 `prepared statement ... already exists`가 산발적으로 난다.
+- **트랜잭션 모드 풀러로 붙을 때 `prepare: false`.** prepared statement가 세션을 넘어
+  살아남지 못해 `prepared statement ... already exists`가 산발적으로 난다.
   로컬에서는 재현되지 않고 배포 후 트래픽이 붙어야 나타난다. 연결 문자열을 보고 자동 판별한다.
 - **인스턴스당 커넥션 `max: 1`.** 인스턴스 수만큼 곱해진다.
+- **`transform.sql`은 staging이 비어 있으면 실패한다.** 이 가드가 없으면 `place`를 통째로
+  비운 뒤 0건을 넣고 "성공"으로 끝난다. 무료 티어 용량을 아끼려고 staging을 비워두기 때문에
+  실제로 밟기 쉬운 함정이다(적재 후 staging 71MB를 비워 DB를 169MB → 99MB로 줄였다).
+
+### 배포된 DB 상태 (2026-08, 무료 티어)
+
+```
+PostGIS 3.3.7 · place 136,995 · industry 330 · DB 99MB / 500MB
+부평역 반경 500m = 3,074곳 (로컬과 일치)
+Bitmap Index Scan on place_geom_idx · 77ms
+```
 
 ### 배포 후 할 것
 
