@@ -32,6 +32,11 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+# 공공데이터 원본 (ZIP/CSV). 수백 MB라 커밋하지 않고 스크립트로 내려받는다.
+/data/*
+!/data/.gitkeep
 
 # vercel
 .vercel

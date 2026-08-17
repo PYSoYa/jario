@@ -1,26 +1,103 @@
 @import "tailwindcss";
 
+@theme {
+  /* 지적편집도의 어두운 판. 지도(밝은 회백색) 위에 얹혔을 때 도구처럼 읽히도록. */
+  --color-ink: #14111a;
+  --color-surface: #1e1a26;
+  --color-raised: #272233;
+  --color-line: #383044;
+  --color-paper: #ece7e3;
+  --color-muted: #968ea6;
+
+  /* 지적편집도에서 상업지역을 칠하는 분홍. 이 서비스가 다루는 땅의 색이다. */
+  --color-commerce: #e0447f;
+  --color-commerce-dim: #7d2a4c;
+
+  --font-sans: var(--font-plex-kr);
+  --font-mono: var(--font-plex-mono);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* 상권 밀도 스케일 — 여유(청록)에서 과밀(상업지 분홍)로.
+     업종 분포 막대와 지도 반경 원이 같은 스케일을 공유한다. */
+  --density-1: #2f7f77;
+  --density-2: #4a7d8c;
+  --density-3: #6e7597;
+  --density-4: #a35f8c;
+  --density-5: #e0447f;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ink);
+  color: var(--color-paper);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  /* 지도가 화면을 채우므로 문서 스크롤은 없다. 패널만 내부에서 스크롤한다. */
+  overflow: hidden;
+}
+
+/* 계측값은 전부 mono로 둔다 — 개수, 거리, 반경, 업종 코드.
+   자릿수가 흔들리지 않아야 값을 비교할 수 있다. */
+.measure {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* 업종 분포 한 줄. 막대를 따로 그리지 않고 행 자체가 채워진다. */
+.density-row {
+  position: relative;
+  isolation: isolate;
+}
+
+.density-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  width: var(--fill, 0%);
+  background: var(--tone, var(--density-3));
+  opacity: 0.22;
+  transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 측량 핑 — 자리를 찍었을 때 반경이 한 번 퍼진다. 이 페이지의 유일한 애니메이션이다. */
+@keyframes survey-ping {
+  from {
+    transform: scale(0.35);
+    opacity: 0.75;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+.survey-ping {
+  animation: survey-ping 900ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 키보드 초점은 항상 보여야 한다. */
+:focus-visible {
+  outline: 2px solid var(--color-commerce);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .survey-ping {
+    animation: none;
+  }
+  .density-row::before {
+    transition: none;
+  }
+}
+
+/* 카카오맵이 삽입하는 지도 타일 위에 우리 패널이 항상 올라오도록 */
+.map-canvas {
+  position: absolute;
+  inset: 0;
 }

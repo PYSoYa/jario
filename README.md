@@ -1,36 +1,205 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# jario (자리)
 
-## Getting Started
+> 창업할 자리를 고를 때, 반경 500m 안에 같은 업종이 몇 개인지부터 본다.
 
-First, run the development server:
+지도에서 위치를 찍으면 그 주변의 경쟁 밀도·업종 분포를 계산해주는 상권 분석 서비스.
+소상공인시장진흥공단이 공개하는 전국 상가업소 데이터를 기반으로 한다. **인천**부터 시작해 전국으로 넓힌다.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+현재 **M1(반경 검색)** 단계다. DB 계층은 동작하고, UI는 아직 없다.
+
+## 데이터 실사 결과 (인천 · 2026-06 스냅샷)
+
+스키마를 짜기 전에 원본을 먼저 확인했다. 결과는 예상보다 깨끗했다.
+
+| 항목 | 결과 |
+|---|---|
+| 행 수 | 136,995 |
+| 컬럼 | 39개 (UTF-8) |
+| 상가업소번호 중복 | 0 → 자연키를 PK로 사용 |
+| 좌표 결측·파싱 실패 | 0.00% |
+| 컬럼 수 불일치 행 | 0 |
+| 업종 코드 계층 일관성 | 100% (`G2` → `G204` → `G20404` 접두어 구조) |
+| 코드→명 매핑 | 업종·지역 전부 1:1 |
+| 행정동 | 158개 / 시군구 11개 |
+
+확인해서 건진 것들:
+
+- **동봉된 안내문이 틀렸다.** `[필독]파일열람방법.txt`는 업종 대분류를 8개(관광/여가/오락, 부동산, 생활서비스, …)라고 적어놨지만 실제 데이터는 **10개이고 분류 체계 자체가 다르다**(음식, 소매, 수리·개인, 과학·기술, 교육, 예술·스포츠, 시설관리·임대, 부동산, 보건의료, 숙박). 문서 대신 데이터를 봤다.
+- **`호정보`·`동정보`는 100% 빈값**이라 컬럼을 아예 만들지 않았다.
+- **`층정보`에 층이 아닌 값이 섞여 있다.** `1103`, `2302`, `15015` 같은 값은 층수가 아니라 호실번호(11층 3호)다. 범위 가드(-10~200)로 걸러 34건을 `floor_no`에서 제외하고 `floor_raw`에 원문을 보존했다. `지`(823건) → -1, `B1`~`B3` → 음수 층으로 정규화했다.
+- 시군구에 **제물포구·영종구·서해구·검단구**가 있다. 2026년 인천 행정구역 개편이 반영된 데이터다.
+
+재현: `pnpm data:inspect data/<파일>.csv`
+
+## 반경 검색 성능 (현재)
+
+부평역(126.7244, 37.4894) 반경 500m, 136,995행 기준:
+
+```
+Bitmap Index Scan on place_geom_idx   → 후보 4,629건
+  Index Cond: geom && _st_expand(..., 500)
+Parallel Bitmap Heap Scan             → 통과 3,074 / 제거 1,556
+Execution Time: 7.7 ms
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+GiST 인덱스가 바운딩박스로 후보를 좁힌 뒤 정확 거리 필터가 도는 정상 경로다.
+`Seq Scan`이 보이면 실패다. 재현: `pnpm db:check`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+---
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 왜 데이터를 우리 DB에 적재하는가
 
-## Learn More
+공공데이터포털은 반경 조회 API도 함께 제공한다. 그런데도 CSV를 받아 적재하는 쪽을 택했다.
 
-To learn more about Next.js, take a look at the following resources:
+- 이 서비스의 본체는 조회가 아니라 **집계**다. "반경 내 동종 업소 수", "업종별 밀집도", "과밀 지역 탐색"은 남의 API 응답을 모아서는 만들 수 없다.
+- 지도를 팬/줌할 때마다 외부 API를 때리면 호출량 제한에 바로 걸린다.
+- 해당 데이터의 이용허락범위가 "제한 없음"이라 적재에 제약이 없다.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+그래서 PostGIS가 선택이 아니라 전제가 된다.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 거리 계산: 좌표계를 먼저 정한 이유
 
-## Deploy on Vercel
+원본 좌표는 WGS84(EPSG:4326)다. 여기서 `ST_Distance`를 그냥 부르면 결과 단위가 **미터가 아니라 도(degree)**다.
+도를 미터로 바꾸려고 상수(111,320)를 곱하는 코드를 흔히 보는데, 그게 왜 틀리는지 인천 좌표로 확인했다.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+인천시청(126.7052, 37.4563)에서 **같은 0.005°만큼** 떨어진 두 점의 실제 거리:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| 방향 | `geography` | EPSG:5179 | 도 × 111,320 |
+|---|---:|---:|---:|
+| 동쪽 0.005° | 442.4 m | 442.2 m | 556.6 m |
+| 북쪽 0.005° | 554.9 m | 554.7 m | 556.6 m |
+
+경도 1도의 실제 거리는 `cos(위도)`에 비례해 줄어든다. 그래서 위도 37.46°에서 동서 방향은 남북 방향의 약 80%다.
+상수 곱셈은 **동서 방향을 114m(26%) 과대평가**한다 — 반경 500m가 핵심 기능인 서비스에서는 결과가 통째로 틀어지는 크기다.
+
+`geography` 타입과 EPSG:5179 투영은 0.2m(0.05%) 차이로 둘 다 정확하다.
+**`geography`를 채택**했다 — 매 쿼리마다 `ST_Transform`을 부르지 않아도 되고, GiST 인덱스가 그대로 동작한다.
+
+재현:
+
+```bash
+pnpm db:up
+pnpm db:migrate
+pnpm db:check
+```
+
+## API
+
+### `GET /api/places/nearby`
+
+| 파라미터 | 필수 | 범위 | 기본값 |
+|---|---|---|---|
+| `lon` | ✓ | 124 ~ 132 | — |
+| `lat` | ✓ | 33 ~ 39 | — |
+| `radius` | | 50 ~ 2000 (m) | 500 |
+| `industry` | | 업종 코드 (2·4·6자) | 전체 |
+| `limit` | | 1 ~ 2000 | 500 |
+
+```bash
+curl "http://localhost:3001/api/places/nearby?lon=126.7244&lat=37.4894&radius=500&industry=I2"
+```
+
+```jsonc
+{
+  "center": { "lon": 126.7244, "lat": 37.4894 },
+  "radius": 500,
+  "total": 3074,           // LIMIT과 무관한 실제 개수
+  "truncated": true,       // items가 잘렸는지
+  "byTopIndustry": [ { "code": "G2", "name": "소매", "count": 994 }, … ],
+  "items": [ { "name": "…", "industryName": "노래방", "distanceM": 66, … } ]
+}
+```
+
+설계 노트:
+
+- **총 개수를 목록과 따로 센다.** `items`에는 지도 마커용 상한이 걸려 있어서 `items.length`로는 밀집도를 알 수 없다. "이 자리 반경 500m에 몇 개"가 이 서비스의 답이므로 잘리지 않은 수가 따로 필요하다.
+- **업종 필터는 접두어 매칭 하나로 3단계를 모두 받는다.** 코드가 대(2자) → 중(4자) → 소(6자) 접두어 구조이고 레벨별 길이가 균일함을 데이터에서 확인했다. 덕분에 레벨별 파라미터를 나누거나 조인을 늘리지 않아도 된다.
+- **좌표 범위를 DB `CHECK`와 같은 값으로 API에서도 막는다.** 한국 밖 좌표는 좌표계를 잘못 쓴 것이지 사용자 입력이 아니다.
+- `radius` 상한 2,000m — 없으면 요청 한 번으로 인천 전체를 긁을 수 있고, 도보권을 넘으면 상권 분석의 의미도 옅어진다.
+
+## 화면
+
+카카오 기본 지도는 밝고 라벨이 빽빽하다. 그 위에 데이터를 얹으면 대부분 묻힌다. 그래서:
+
+- **반경 원을 두 겹으로 그린다** — 굵은 흰 선을 깔고 그 위에 자주색 실선. 배경이 무엇이든 경계가 선다
+- **클러스터를 카카오 기본(형광 연두·노랑)에서 바꿨다** — 배경 지도의 노란 도로와 섞여 읽히지 않았다. 어두운 판에 흰 숫자로
+- **내가 찍은 자리는 크로스헤어**다. 동그라미로 두면 클러스터 마커와 형태가 같아서 색만으로는 구분되지 않는다
+- **업종 분포는 막대가 아니라 행 자체가 채워진다.** 색은 순위가 아니라 최대 업종 대비 비율로 정한다 — 순위로 칠하면 2위가 1위의 90%든 5%든 같은 색이라 색이 아무것도 말해주지 않는다
+- 계측값(개수·거리·반경·업종 코드)은 전부 mono로 셋팅한다. 자릿수가 흔들리면 값을 비교할 수 없다
+
+색은 **지적편집도**에서 가져왔다. 지적도에서 상업지역은 분홍으로 칠하는데, 이 서비스가 다루는 땅이 정확히 거기다.
+
+## 스택
+
+| | |
+|---|---|
+| 프론트 | Next.js 16 (App Router) · React 19 · TypeScript · Tailwind 4 |
+| DB | PostgreSQL 17 + PostGIS 3.5 (로컬 Docker → 배포 Supabase) |
+| 쿼리 | postgres.js + 순수 SQL 마이그레이션 |
+| 지도 | 카카오맵 SDK (→ 성능 한계 확인 시 MapLibre + `ST_AsMVT` 벡터타일) |
+
+ORM을 쓰지 않는다. 이 프로젝트에서 중요한 건 `geography` 컬럼과 공간 인덱스인데,
+대부분의 ORM이 그걸 표현하지 못해 결국 raw SQL로 빠져나오게 된다. 그럴 바에는 SQL 파일을 진실의 원본으로 둔다.
+
+## 시작하기
+
+```bash
+pnpm install
+cp .env.example .env.local     # 카카오맵 키를 채운다
+
+pnpm db:up                     # PostGIS 컨테이너 기동
+pnpm db:migrate                # 스키마 적용
+pnpm dev
+```
+
+### 데이터 적재
+
+원본 데이터(1.5GB)는 저장소에 포함하지 않는다.
+[공공데이터포털](https://www.data.go.kr/data/15083033/fileData.do)에서 ZIP을 받는다. ZIP은 **시도별 16개 CSV**로 나뉘어 있고, 인천만 쓴다.
+
+ZIP 내부 파일명이 CP949로 저장돼 있어 `unzip`으로 풀면 이름이 깨진다:
+
+```bash
+python3 -c "
+import zipfile, pathlib
+z = zipfile.ZipFile('<받은파일>.zip', metadata_encoding='cp949')
+dst = pathlib.Path('data')
+for n in z.namelist():
+    if '인천' in n:
+        (dst / pathlib.Path(n).name).write_bytes(z.read(n))
+        print(pathlib.Path(n).name)
+"
+```
+
+그다음:
+
+```bash
+pnpm data:inspect "data/소상공인시장진흥공단_상가(상권)정보_인천_202606.csv"   # 실사 먼저
+pnpm db:migrate
+docker exec -i jario-db psql -U jario -d jario -c "TRUNCATE staging_place; \
+  COPY staging_place FROM '/data/소상공인시장진흥공단_상가(상권)정보_인천_202606.csv' \
+  WITH (FORMAT csv, HEADER true, ENCODING 'UTF8');"
+pnpm data:transform                                                          # staging → place/industry
+pnpm db:check                                                                # 좌표계·인덱스 검증
+```
+
+적재는 애플리케이션 INSERT가 아니라 서버측 `COPY`다 (13만 행 0.8초). `data/`는 컨테이너에 `/data`로 마운트돼 있다.
+
+스키마를 추측하지 않고 항상 `data:inspect`를 먼저 돌린다.
+공공데이터는 분기마다 컬럼이 조용히 바뀌고, 동봉 문서가 실제 데이터와 다른 경우도 있다(실제로 그랬다).
+
+## 로드맵
+
+- [x] **M0** 데이터 실사 — 컬럼·인코딩·좌표 품질 확인, 스키마 설계 근거 확보
+- [ ] **M1** 반경 검색
+  - [x] 스키마 + ETL (staging → place/industry), 136,995행 적재
+  - [x] `ST_DWithin` + GiST 인덱스, 실행계획으로 확인 (7.7ms)
+  - [x] 조회 API `GET /api/places/nearby`
+  - [x] 지도 UI (카카오맵) — 클릭으로 자리 선택, 내 위치, 반경·업종 필터
+- [ ] **M2** 밀집도 분석 — 업종별 히트맵, 행정동 집계, 과밀/빈틈 탐색
+- [ ] **M3** 후보지 A/B 비교 리포트 저장·공유, 인증
+- [ ] **M4** 배포, 분기 갱신 파이프라인, 성능 측정 기록
+
+## 데이터 출처
+
+- [소상공인시장진흥공단_상가(상권)정보](https://www.data.go.kr/data/15083033/fileData.do) — 분기 갱신, 이용허락범위 제한 없음

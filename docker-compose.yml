@@ -1,0 +1,37 @@
+services:
+  db:
+    # 공식 postgis/postgis 이미지는 arm64(Apple Silicon) 매니페스트가 없다.
+    # imresamu는 docker-postgis 메인테이너가 내는 멀티아치 빌드로 내용물은 같다.
+    # 로컬 개발 전용이고 배포는 Supabase의 PostGIS를 쓰므로 이 선택은 운영에 영향이 없다.
+    image: imresamu/postgis:17-3.5
+    container_name: jario-db
+    environment:
+      POSTGRES_USER: jario
+      POSTGRES_PASSWORD: jario_local_dev
+      POSTGRES_DB: jario
+      # 이미지에 ko_KR 로케일이 없어 LANG을 지정하면 initdb가 실패한다.
+      # 이미지 기본값(en_US.utf8)을 그대로 쓴다 — 인코딩이 UTF-8이면 한글 저장에는 문제가 없다.
+    ports:
+      - "54329:5432"
+    volumes:
+      - jario-db-data:/var/lib/postgresql/data
+      # 컨테이너 안에서 CSV를 COPY로 읽기 위해 마운트한다.
+      # 12만 행 규모면 애플리케이션에서 INSERT 하는 것보다 COPY가 압도적으로 빠르다.
+      - ./data:/data:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jario -d jario"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # 대량 적재와 공간 인덱스 빌드를 로컬에서 실험하려면 기본값이 너무 작다
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=512MB
+
+volumes:
+  jario-db-data:

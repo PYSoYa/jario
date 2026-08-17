@@ -2,20 +2,31 @@
   "name": "jario",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:psql": "docker exec -it jario-db psql -U jario -d jario",
+    "db:check": "for f in db/checks/*.sql; do echo \"\\n══ $f\"; docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -f - < \"$f\" || exit 1; done",
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.ts",
+    "data:inspect": "node scripts/inspect-csv.ts",
+    "data:transform": "docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -f - < db/etl/transform.sql"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.101.4",
     "next": "16.3.1",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^26.2.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
