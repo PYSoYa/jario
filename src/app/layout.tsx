@@ -39,6 +39,8 @@ export const metadata: Metadata = {
   title: 'jario — 창업 상권 분석',
   description:
     '자리를 찍으면 반경 안의 경쟁 밀도를 계산합니다. 서울·인천 상가업소 691,087곳 기반.',
+  // X/트위터는 og: 만으로는 큰 이미지를 안 띄운다. 별도 태그를 본다.
+  twitter: { card: 'summary_large_image' },
 }
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {

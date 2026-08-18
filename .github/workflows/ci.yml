@@ -85,3 +85,18 @@ jobs:
         env:
           # 빌드 중 프리렌더가 DB를 건드리지 않는지 확인하는 의미도 있다.
           NEXT_PUBLIC_KAKAO_MAP_KEY: ci-placeholder
+
+      # OG 이미지는 유닛 테스트로 못 잡는다. node --test 는 JSX를 읽지 못하고,
+      # 무엇보다 Satori의 실패는 빈 응답으로 나온다 — 빌드는 통과하고 페이지도
+      # 멀쩡한데 미리보기만 죽는다. 실제로 한 번 겪었다.
+      # 그래서 앱을 띄워놓고 진짜 PNG가 나오는지 바이트로 확인한다.
+      - name: 스모크 (빌드된 앱을 띄워 HTTP로 확인)
+        run: |
+          pnpm start -p 3001 &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://localhost:3001/ && break
+            sleep 1
+          done
+          BASE=http://localhost:3001 ./scripts/smoke.sh
+        env:
+          NEXT_PUBLIC_KAKAO_MAP_KEY: ci-placeholder

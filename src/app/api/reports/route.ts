@@ -1,3 +1,4 @@
+import { clientKey, REPORTS_PER_HOUR, takeReportQuota } from '@/lib/rate-limit'
 import { createReport, reportInputSchema } from '@/lib/reports'
 
 /**
@@ -29,8 +30,30 @@ export async function POST(request: Request) {
   }
 
   try {
+    // 로그인이 없어서 누구나 무제한으로 부를 수 있다. 스크립트 한 번이면
+    // 무료 티어 DB가 리포트로 찬다. 검증을 통과한 뒤에 센다 — 잘못된 요청까지
+    // 한도에 넣으면 오타 몇 번에 막히게 된다.
+    const quota = await takeReportQuota(clientKey(request))
+    if (!quota.allowed) {
+      return Response.json(
+        {
+          error: `리포트는 한 시간에 ${REPORTS_PER_HOUR}개까지 만들 수 있습니다.`,
+          resetAt: quota.resetAt.toISOString(),
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(Math.ceil((quota.resetAt.getTime() - Date.now()) / 1000)),
+          },
+        },
+      )
+    }
+
     const id = await createReport(parsed.data)
-    return Response.json({ id, url: `/r/${id}` }, { status: 201 })
+    return Response.json(
+      { id, url: `/r/${id}` },
+      { status: 201, headers: { 'X-RateLimit-Remaining': String(quota.remaining) } },
+    )
   } catch (err) {
     console.error('[reports]', err)
     return Response.json({ error: '저장에 실패했습니다.' }, { status: 500 })

@@ -1,4 +1,5 @@
 import { sql } from '@/lib/db'
+import { sweepReportQuota } from '@/lib/rate-limit'
 
 /**
  * GET /api/cron/keepalive — Vercel Cron이 하루 한 번 호출한다.
@@ -28,12 +29,16 @@ export async function GET(request: Request) {
         (SELECT count(*) FROM industry)::text AS industries
     `
 
+    // 지난 창의 레이트 리밋 기록을 치운다. 남겨둬야 할 이유가 없고,
+    // 어차피 하루 한 번 도는 작업이라 여기 얹는 게 맞다.
+    const swept = await sweepReportQuota()
+
     const places = Number(row.places)
     // 연결은 됐는데 데이터가 비었으면 살아 있다고 볼 수 없다.
     const healthy = places > 1000
 
     return Response.json(
-      { ok: healthy, places, industries: Number(row.industries) },
+      { ok: healthy, places, industries: Number(row.industries), sweptQuotaRows: swept },
       { status: healthy ? 200 : 503 },
     )
   } catch (err) {
