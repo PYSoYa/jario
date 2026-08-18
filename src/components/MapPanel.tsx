@@ -1386,6 +1386,28 @@ export default function MapPanel() {
                     </Row>
                   </dl>
 
+                  {/*
+                    이 데이터에는 사진도 리뷰도 영업시간도 없다. 그건 지도 서비스가 갖고 있고,
+                    카카오 로컬 API는 리뷰를 응답에 주지 않는다 — 가져오려면 크롤링뿐인데
+                    약관 위반이다. 그래서 가져오지 않고 넘긴다.
+
+                    Places API를 호출하지도 않는다. 카카오맵 공식 URL 링크 규격이
+                    `/link/map/이름,위도,경도` 라 좌표만으로 열 수 있다.
+                    키도, 왕복도, 매칭 실패도 없다.
+                  */}
+                  <a
+                    href={`https://map.kakao.com/link/map/${encodeURIComponent(detail.name)},${detail.lat},${detail.lon}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-4 flex items-center justify-between rounded border border-line px-3 py-2 text-sm text-paper transition-colors hover:border-commerce hover:text-commerce"
+                  >
+                    <span>카카오맵에서 보기</span>
+                    <span aria-hidden="true" className="text-muted">
+                      ↗
+                    </span>
+                    <span className="sr-only">새 창에서 열립니다</span>
+                  </a>
+
                   <p className="mt-4 text-xs leading-snug text-muted">
                     소상공인시장진흥공단 2026-06 스냅샷입니다. 폐업·이전이 반영되지 않았을 수
                     있습니다.
