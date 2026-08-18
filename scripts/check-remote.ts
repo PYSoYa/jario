@@ -57,6 +57,21 @@ async function main() {
     SELECT pg_size_pretty(pg_database_size(current_database())) AS size
   `
   console.log('\nDB 크기 :', size.size)
+
+  // 서버리스에서 인스턴스가 늘어나면 각자 풀을 연다. 한도를 넘으면 새 연결이
+  // 막히고, 요청은 maxDuration 까지 매달려 있다가 실패한다. 실제로 그렇게 겪었다.
+  const [conn] = await sql<
+    { total: string; active: string; idle: string; limit_: string }[]
+  >`
+    SELECT count(*)::text AS total,
+           count(*) FILTER (WHERE state = 'active')::text AS active,
+           count(*) FILTER (WHERE state = 'idle')::text   AS idle,
+           current_setting('max_connections')             AS limit_
+    FROM pg_stat_activity WHERE datname = current_database()
+  `
+  console.log(
+    `연결    : ${conn.total}개 (활성 ${conn.active} / 유휴 ${conn.idle}) · 상한 ${conn.limit_}`,
+  )
 }
 
 main()

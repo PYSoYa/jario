@@ -373,34 +373,27 @@ export async function measureChurn(p: {
   radius: number
   industry?: string
 }): Promise<Churn> {
-  const [active, closed, opened] = await Promise.all([
-    sql<{ n: string }[]>`
-      SELECT count(*)::text AS n
-      FROM place p
-      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
-        ${industryFilter(p.industry)}
-    `,
-    sql<{ n: string }[]>`
-      SELECT count(*)::text AS n
-      FROM place_closed p
-      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
-        ${industryFilter(p.industry)}
-    `,
-    // place_opened 는 좌표를 들고 있지 않다. 반경 판정은 place 의 GiST가 하고,
-    // 신규 여부만 PK 조인으로 확인한다.
-    sql<{ n: string }[]>`
-      SELECT count(*)::text AS n
-      FROM place p
-      JOIN place_opened o ON o.place_id = p.place_id
-      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
-        ${industryFilter(p.industry)}
-    `,
-  ])
+  // 세 수를 한 번에 받는다. 예전에는 쿼리 셋을 Promise.all 로 던졌는데, 화면 하나가
+  // 이미 열 개 넘는 쿼리를 동시에 열고 있었다. 서버리스에서 인스턴스가 늘면 그만큼
+  // 연결이 늘어 상한(60)에 닿고, 새 연결이 막혀 요청이 maxDuration 까지 매달렸다.
+  // 각 세는 대상이 다른 테이블이라 계획도 따로 잡히므로, 합쳐도 느려지지 않는다.
+  const [row] = await sql<{ active: string; closed: string; opened: string }[]>`
+    WITH at AS (SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g)
+    SELECT
+      (SELECT count(*) FROM place p, at
+        WHERE ST_DWithin(p.geom, at.g, ${p.radius}) ${industryFilter(p.industry)})::text AS active,
+      (SELECT count(*) FROM place_closed p, at
+        WHERE ST_DWithin(p.geom, at.g, ${p.radius}) ${industryFilter(p.industry)})::text AS closed,
+      -- place_opened 는 좌표를 들고 있지 않다. 반경 판정은 place 의 GiST가 하고,
+      -- 신규 여부만 PK 조인으로 확인한다.
+      (SELECT count(*) FROM place p JOIN place_opened o ON o.place_id = p.place_id, at
+        WHERE ST_DWithin(p.geom, at.g, ${p.radius}) ${industryFilter(p.industry)})::text AS opened
+  `
 
   return {
-    active: Number(active[0].n),
-    closed: Number(closed[0].n),
-    opened: Number(opened[0].n),
+    active: Number(row.active),
+    closed: Number(row.closed),
+    opened: Number(row.opened),
     from: CHURN_FROM,
     to: CHURN_TO,
   }
@@ -509,7 +502,7 @@ export async function survivalByIndustry(p: {
 }): Promise<{ items: IndustrySurvival[]; baselineRate: number | null; minPrev: number }> {
   const limit = p.limit ?? 5
   const rows = await sql<
-    { code: string; name: string; prev: string; closed: string; rate: string }[]
+    { code: string; name: string; prev: string; closed: string; rate: string; base_rate: string | null }[]
   >`
     WITH at AS (SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g),
     now_c AS (
@@ -533,24 +526,16 @@ export async function survivalByIndustry(p: {
                    LEFT JOIN opened_c o ON o.code = n.code
     )
     SELECT j.code, i.name, j.prev::text, j.closed::text,
-           round(100.0 * j.closed / j.prev, 1)::text AS rate
+           round(100.0 * j.closed / j.prev, 1)::text AS rate,
+           -- 비교 기준(반경 전체)을 같은 쿼리에서 낸다. 이 자리 전체가 몇 %인지 모르면
+           -- "12%"가 높은 건지 알 수 없다. 예전에는 쿼리를 하나 더 던졌는데,
+           -- 화면 하나가 이미 열 개 넘게 열고 있어 연결 상한에 닿았다.
+           -- 하한(MIN_PREV) 위아래를 모두 더해야 반경 전체 비율이 된다.
+           (SELECT round(100.0 * sum(closed) / NULLIF(sum(prev), 0), 1) FROM j)::text AS base_rate
     FROM j JOIN industry i ON i.code = j.code
     WHERE j.prev >= ${MIN_PREV}
     ORDER BY j.closed::numeric / j.prev DESC, j.prev DESC
     LIMIT ${limit}
-  `
-
-  // 비교 기준. 이 자리 전체가 몇 %인지 모르면 "12%"가 높은 건지 알 수 없다.
-  const [base] = await sql<{ rate: string | null }[]>`
-    WITH at AS (SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g),
-    t AS (
-      SELECT
-        (SELECT count(*) FROM place p, at WHERE ST_DWithin(p.geom, at.g, ${p.radius})) AS now_n,
-        (SELECT count(*) FROM place_closed c, at WHERE ST_DWithin(c.geom, at.g, ${p.radius})) AS closed_n,
-        (SELECT count(*) FROM place p JOIN place_opened o ON o.place_id = p.place_id, at
-          WHERE ST_DWithin(p.geom, at.g, ${p.radius})) AS opened_n
-    )
-    SELECT round(100.0 * closed_n / NULLIF(now_n + closed_n - opened_n, 0), 1)::text AS rate FROM t
   `
 
   return {
@@ -561,7 +546,7 @@ export async function survivalByIndustry(p: {
       closed: Number(r.closed),
       rate: Number(r.rate),
     })),
-    baselineRate: base?.rate == null ? null : Number(base.rate),
+    baselineRate: rows[0]?.base_rate == null ? null : Number(rows[0].base_rate),
     minPrev: MIN_PREV,
   }
 }
