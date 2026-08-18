@@ -9,9 +9,19 @@ import { summarizeNearby } from '../src/lib/places.ts'
 
 const CAFE = 'I21201'
 
+/**
+ * 전체 데이터인가, CI용 시드 픽스처인가.
+ *
+ * 픽스처는 행정동 11개만 담은 부분집합이라, "어떤 지점의 반경 500m 이웃"이
+ * 픽스처 경계 밖으로 뻗는다. 그런 이웃을 비교하는 검증은 부분 데이터에서
+ * 성립할 수 없다. 데이터 크기로 판별해 그런 테스트만 건너뛴다.
+ */
+let fullDataset = false
+
 before(async () => {
   const [row] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM place`
   if (row.n === 0) throw new Error('place 테이블이 비어 있습니다. README의 "데이터 적재" 참고.')
+  fullDataset = row.n > 100_000
 })
 
 after(async () => {
@@ -65,7 +75,14 @@ describe('analyzeDongs', () => {
    * 강화 길상면은 0곳이었다 — "카페가 가장 몰린 동네"라고 안내하면서.
    * 대표 지점은 반드시 그 업종이 실제로 모인 곳이어야 한다.
    */
-  it('대표 지점은 평균 좌표보다 그 업종에 가깝다', async () => {
+  it('대표 지점은 평균 좌표보다 그 업종에 가깝다', async (t) => {
+    if (!fullDataset) {
+      // 두 지점의 반경 500m 이웃을 비교하는데, 픽스처에서는 그 이웃이 경계 밖으로
+      // 뻗으면서 두 지점이 서로 다르게 잘린다. 부분 데이터로는 판정할 수 없다.
+      t.skip('전체 데이터가 필요합니다 (CI 픽스처에서는 반경 이웃이 잘림)')
+      return
+    }
+
     const { dongs } = await analyzeDongs({ industry: CAFE })
     const top = dongs.slice(0, 6)
 

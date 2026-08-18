@@ -1,0 +1,87 @@
+name: ci
+
+# 테스트가 PostGIS를 필요로 한다. 목으로 대체하지 않는 이유는 tests/places.test.ts
+# 상단 주석 참고 — 이 프로젝트에서 틀릴 수 있는 건 TypeScript가 아니라 SQL이다.
+#
+# 원본 데이터(72MB CSV)는 저장소에 없으므로, 행정동 11개를 온전히 담은
+# 시드 픽스처(tests/fixtures/seed.csv.gz, 2.6MB)로 같은 ETL을 돌린다.
+# 부평역 500m = 3,074, 강남역 500m = 6,615 같은 실제 검증값이 그대로 유지된다.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        # 로컬은 arm64라 imresamu 빌드를 쓰지만, CI 러너는 amd64라 공식 이미지가 돈다.
+        image: postgis/postgis:17-3.5
+        env:
+          POSTGRES_USER: jario
+          POSTGRES_PASSWORD: jario_ci
+          POSTGRES_DB: jario
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jario -d jario"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://jario:jario_ci@localhost:5432/jario
+      PGPASSWORD: jario_ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 스키마 적용
+        run: pnpm db:migrate
+
+      - name: 시드 픽스처 적재
+        run: |
+          gunzip -c tests/fixtures/seed.csv.gz > /tmp/seed.csv
+          wc -l /tmp/seed.csv
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+            -c "\copy staging_place FROM '/tmp/seed.csv' WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')"
+
+      - name: 정제 + 파생 통계
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f db/etl/transform.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f db/etl/refresh-stats.sql
+
+      - name: 적재 확인
+        run: |
+          psql "$DATABASE_URL" -X -c "
+            SELECT (SELECT count(*) FROM place) AS place,
+                   (SELECT count(*) FROM industry) AS industry,
+                   (SELECT count(*) FROM dong_stat) AS dong,
+                   (SELECT count(*) FROM place
+                    WHERE ST_DWithin(geom, ST_MakePoint(126.7244,37.4894)::geography, 500)) AS 부평역500m;"
+
+      - name: 좌표계·인덱스 검증
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/checks/distance_srid.sql
+
+      - run: pnpm lint
+
+      - run: pnpm test
+
+      - run: pnpm build
+        env:
+          # 빌드 중 프리렌더가 DB를 건드리지 않는지 확인하는 의미도 있다.
+          NEXT_PUBLIC_KAKAO_MAP_KEY: ci-placeholder
