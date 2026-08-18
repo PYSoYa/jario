@@ -465,3 +465,103 @@ export async function findMarketDistrict(p: {
     rentPerM2: row.rent === null ? null : Number(row.rent),
   }
 }
+
+export type IndustrySurvival = {
+  code: string
+  name: string
+  /** 이전 분기에 이 반경에 있던 수 (= 지금 + 사라짐 - 새로생김) */
+  prev: number
+  closed: number
+  /** 사라진 비율 % */
+  rate: number
+}
+
+/**
+ * 표본 하한. 이보다 적은 업종은 아예 보여주지 않는다.
+ *
+ * 재서 정했다. 다섯 자리(부평역·강남역·홍대·주안·명동) 반경 500m에서 표본 구간별
+ * 소멸률 분포를 보면, **평균은 7~8%로 일정한데 편차만 무너진다**:
+ *
+ *   표본  1–4  → 편차 15.6, 최대 100%   (2곳 중 1곳이면 50%다)
+ *   표본  5–9  → 편차 12.8, 최대  66.7%
+ *   표본 10–19 → 편차  8.0, 최대  31.3%
+ *   표본 20–49 → 편차  6.8, 최대  33.3%
+ *   표본 50+   → 편차  5.3, 최대  27.5%
+ *
+ * 20부터 편차가 평균 아래로 내려가고 그 뒤로는 완만하다. 더 올리면 표시되는 업종이
+ * 너무 줄어든다. 이 값을 안 두면 "결혼 상담 서비스업 50% 사라짐"(2곳 중 1곳)이
+ * 목록 맨 위에 온다 — 숫자는 맞지만 아무 뜻이 없다.
+ */
+const MIN_PREV = 20
+
+/**
+ * 이 자리 반경에서 업종별로 얼마나 사라졌나.
+ *
+ * 분모는 "지금"이 아니라 **이전 분기**다. 지금 남아 있는 것으로 나누면 많이 사라진
+ * 업종일수록 분모가 작아져 비율이 부풀려진다. 이전 분기 수는 스냅샷 대조로 복원한다 —
+ * 지금 + 사라짐 - 새로생김.
+ */
+export async function survivalByIndustry(p: {
+  lon: number
+  lat: number
+  radius: number
+  limit?: number
+}): Promise<{ items: IndustrySurvival[]; baselineRate: number | null; minPrev: number }> {
+  const limit = p.limit ?? 5
+  const rows = await sql<
+    { code: string; name: string; prev: string; closed: string; rate: string }[]
+  >`
+    WITH at AS (SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g),
+    now_c AS (
+      SELECT p.industry_code AS code, count(*) AS n
+      FROM place p, at WHERE ST_DWithin(p.geom, at.g, ${p.radius}) GROUP BY 1
+    ),
+    closed_c AS (
+      SELECT c.industry_code AS code, count(*) AS n
+      FROM place_closed c, at WHERE ST_DWithin(c.geom, at.g, ${p.radius}) GROUP BY 1
+    ),
+    opened_c AS (
+      SELECT p.industry_code AS code, count(*) AS n
+      FROM place p JOIN place_opened o ON o.place_id = p.place_id, at
+      WHERE ST_DWithin(p.geom, at.g, ${p.radius}) GROUP BY 1
+    ),
+    j AS (
+      SELECT n.code,
+             n.n + COALESCE(c.n, 0) - COALESCE(o.n, 0) AS prev,
+             COALESCE(c.n, 0) AS closed
+      FROM now_c n LEFT JOIN closed_c c ON c.code = n.code
+                   LEFT JOIN opened_c o ON o.code = n.code
+    )
+    SELECT j.code, i.name, j.prev::text, j.closed::text,
+           round(100.0 * j.closed / j.prev, 1)::text AS rate
+    FROM j JOIN industry i ON i.code = j.code
+    WHERE j.prev >= ${MIN_PREV}
+    ORDER BY j.closed::numeric / j.prev DESC, j.prev DESC
+    LIMIT ${limit}
+  `
+
+  // 비교 기준. 이 자리 전체가 몇 %인지 모르면 "12%"가 높은 건지 알 수 없다.
+  const [base] = await sql<{ rate: string | null }[]>`
+    WITH at AS (SELECT ST_MakePoint(${p.lon}, ${p.lat})::geography AS g),
+    t AS (
+      SELECT
+        (SELECT count(*) FROM place p, at WHERE ST_DWithin(p.geom, at.g, ${p.radius})) AS now_n,
+        (SELECT count(*) FROM place_closed c, at WHERE ST_DWithin(c.geom, at.g, ${p.radius})) AS closed_n,
+        (SELECT count(*) FROM place p JOIN place_opened o ON o.place_id = p.place_id, at
+          WHERE ST_DWithin(p.geom, at.g, ${p.radius})) AS opened_n
+    )
+    SELECT round(100.0 * closed_n / NULLIF(now_n + closed_n - opened_n, 0), 1)::text AS rate FROM t
+  `
+
+  return {
+    items: rows.map((r) => ({
+      code: r.code,
+      name: r.name,
+      prev: Number(r.prev),
+      closed: Number(r.closed),
+      rate: Number(r.rate),
+    })),
+    baselineRate: base?.rate == null ? null : Number(base.rate),
+    minPrev: MIN_PREV,
+  }
+}

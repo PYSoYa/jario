@@ -169,11 +169,18 @@ type Market = {
   rentPerM2: number | null
 }
 
+type Survival = {
+  items: { code: string; name: string; prev: number; closed: number; rate: number }[]
+  baselineRate: number | null
+  minPrev: number
+}
+
 type SpotResponse = NearbyResponse & {
   industries: Industry[]
   markers: MarkerPoint[]
   churn: Churn
   market: Market | null
+  survival: Survival
 }
 
 /**
@@ -1518,6 +1525,41 @@ export default function MapPanel() {
                       <span className="measure">{formatQuarter(spot.churn.from)}</span> 대비{' '}
                       <span className="measure">{formatQuarter(spot.churn.to)}</span> 기준입니다.
                       사라진 곳에는 폐업뿐 아니라 이전·상호변경도 섞여 있습니다.
+                    </p>
+                  </div>
+                )}
+
+                {/*
+                  회전은 반경 전체의 수다. "내 업종은 어떤가"에는 답하지 않는다.
+                  표본이 작은 업종은 아예 빼는 게 핵심이다 — 2곳 중 1곳이 사라지면
+                  50%지만 그건 아무 뜻이 없다. 하한은 재서 정했다(places.ts MIN_PREV).
+                */}
+                {spot?.survival && spot.survival.items.length > 0 && (
+                  <div className="mt-4 border-t border-line pt-4">
+                    <p className="text-xs text-muted">
+                      많이 사라진 업종{' '}
+                      {spot.survival.baselineRate !== null && (
+                        <span className="text-paper/70">
+                          (이 자리 전체 <span className="measure">{spot.survival.baselineRate}</span>%)
+                        </span>
+                      )}
+                    </p>
+                    <ul className="mt-2 space-y-1">
+                      {spot.survival.items.map((it) => (
+                        <li key={it.code} className="flex items-baseline justify-between gap-3">
+                          <span className="truncate text-sm text-paper">{it.name}</span>
+                          <span className="shrink-0">
+                            <span className="measure text-sm text-commerce">{it.rate}</span>
+                            <span className="text-xs text-muted">
+                              % · {it.closed}/{it.prev}
+                            </span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-2 text-xs leading-snug text-muted">
+                      이전 분기에 <span className="measure">{spot.survival.minPrev}</span>곳 이상
+                      있던 업종만 봅니다. 표본이 작으면 비율이 튀어 뜻을 잃습니다.
                     </p>
                   </div>
                 )}

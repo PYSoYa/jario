@@ -7,6 +7,7 @@ import {
   findNearbyPlaces,
   measureChurn,
   summarizeNearby,
+  survivalByIndustry,
 } from '@/lib/places'
 
 /**
@@ -63,7 +64,8 @@ export async function GET(request: Request) {
   const breakdownScope = industry ? industry.slice(0, 2) : undefined
 
   try {
-    const [industries, summary, items, markers, filtered, churn, market] = await Promise.all([
+    const [industries, summary, items, markers, filtered, churn, market, survival] =
+      await Promise.all([
       guard(topIndustries()),
       guard(summarizeNearby({ ...at, industry: breakdownScope, group: 'sub' })),
       guard(findNearbyPlaces({ ...at, industry, limit: 25, order: 'distance' })),
@@ -74,6 +76,7 @@ export async function GET(request: Request) {
       // 회전은 별도 테이블 두 개를 보므로 여기 얹어도 기존 쿼리를 건드리지 않는다.
       guard(measureChurn({ ...at, industry })),
       guard(findMarketDistrict({ lon, lat })),
+      guard(survivalByIndustry({ ...at, limit: 5 })),
     ])
 
     const total = filtered ?? summary.total
@@ -90,6 +93,7 @@ export async function GET(request: Request) {
       truncated: markers.length < total,
       churn,
       market,
+      survival,
     })
   } catch (err) {
     console.error('[spot]', err)
