@@ -40,6 +40,32 @@ describe('findMarketDistrict', () => {
     assert.equal(row.n, 0, `좌표가 겹치는 상권 그룹이 ${row.n}개 있다`)
   })
 
+  it('상권은 자기 시도 안에 있다', async () => {
+    const { sql } = await import('../src/lib/db.ts')
+    const rows = await sql<{ name: string; sido: string; near: string }[]>`
+      SELECT d.name, d.sido,
+             (SELECT p.sido_name FROM place p ORDER BY p.geom <-> d.geom LIMIT 1) AS near
+      FROM market_district d
+    `
+    for (const r of rows) {
+      assert.ok(r.near?.startsWith(r.sido), `${r.name}: ${r.sido} 상권인데 ${r.near}에 있다`)
+    }
+  })
+
+  it('연신내는 은평구다', async () => {
+    // 0011에서 중랑구 신내2동에 찍혀 있었다(15.4km). 상권명을 행정동에 맞출 때
+    // 접미어까지 보게 했더니 '연신내'의 '신내'가 중랑구 신내동에 걸렸다.
+    //
+    // 밀도 검사로는 못 잡는다 — 신내2동도 번화해서 점이 많다. 엉뚱한 자리에
+    // 그럴듯하게 찍히는 종류라, 서로 다른 방법으로 구한 좌표를 대조해야 드러났다.
+    const { sql } = await import('../src/lib/db.ts')
+    const [row] = await sql<{ near: string }[]>`
+      SELECT (SELECT p.sigungu_name FROM place p ORDER BY p.geom <-> d.geom LIMIT 1) AS near
+      FROM market_district d WHERE d.name = '연신내'
+    `
+    assert.equal(row?.near, '은평구')
+  })
+
   it('대표점 주변에 업소가 실제로 있다', async (t) => {
     const { sql } = await import('../src/lib/db.ts')
     // 카카오 첫 결과를 쓰면 동명의 산·공원이 잡힌다(신촌/이대 → 안산자락길).

@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import Script from 'next/script'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import DongRanking from './DongRanking'
+import SpotFinder from './SpotFinder'
 
 type Industry = { code: string; name: string }
 
@@ -352,7 +353,7 @@ export default function MapPanel() {
    * 위에 있는 것만 열어주면 나머지는 닿을 방법이 없다.
    */
   const [stackAt, setStackAt] = useState<{ lon: number; lat: number } | null>(null)
-  const [view, setView] = useState<'spot' | 'dong'>('spot')
+  const [view, setView] = useState<'spot' | 'dong' | 'find'>('spot')
 
   const heightFor = (i: number) =>
     typeof window === 'undefined' ? 0 : Math.round(window.innerHeight * SNAPS[i])
@@ -1332,6 +1333,7 @@ export default function MapPanel() {
             [
               ['spot', '이 자리'],
               ['dong', '동네 비교'],
+              ['find', '자리 찾기'],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -1349,7 +1351,27 @@ export default function MapPanel() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {view === 'dong' ? (
+          {view === 'find' ? (
+            industry ? (
+              <SpotFinder
+                industry={industry}
+                industryName={selected?.name ?? '이 업종'}
+                onPick={(spot) => {
+                  setSelectedId(null)
+                  setNotice(null)
+                  setCenter(spot)
+                  setView('spot')
+                  markProgrammatic()
+                  map.current?.panTo(new window.kakao.maps.LatLng(spot.lat, spot.lon))
+                }}
+              />
+            ) : (
+              <p className="px-5 py-6 text-sm leading-relaxed text-muted">
+                업종을 먼저 고르세요. 조건 검색은 &ldquo;이 업종에 맞는 동네&rdquo;를 찾는 것이라
+                대상 업종이 있어야 합니다.
+              </p>
+            )
+          ) : view === 'dong' ? (
             industry ? (
               <DongRanking
                 industry={industry}
