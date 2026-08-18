@@ -83,3 +83,37 @@ describe('measureChurn', () => {
     assert.equal(row.n, 0, `이름·좌표가 그대로 살아 있는데 사라짐으로 센 행이 ${row.n}건`)
   })
 })
+
+describe('findClosedPoints', () => {
+  it('반경 밖은 한 건도 넣지 않는다', async (t) => {
+    if (!hasChurn) return t.skip('회전 데이터 없음')
+    const { findClosedPoints } = await import('../src/lib/places.ts')
+    const r = await findClosedPoints({ ...BUPYEONG, radius: 300 })
+    for (const p of r.points) {
+      const [row] = await sql<{ d: number }[]>`
+        SELECT ST_Distance(ST_MakePoint(${p.lon}, ${p.lat})::geography,
+                           ST_MakePoint(${BUPYEONG.lon}, ${BUPYEONG.lat})::geography) AS d
+      `
+      assert.ok(row.d <= 300.5, `반경 밖 ${Math.round(row.d)}m`)
+    }
+  })
+
+  it('총 개수는 표본과 따로 센다', async (t) => {
+    if (!hasChurn) return t.skip('회전 데이터 없음')
+    const { findClosedPoints } = await import('../src/lib/places.ts')
+    // 상한을 걸어도 total 은 잘리지 않은 수여야 한다. 잘린 수를 답으로 쓰면
+    // 지도가 "여기는 조금만 사라졌다"고 거짓말한다.
+    const few = await findClosedPoints({ ...BUPYEONG, radius: 500, limit: 5 })
+    const all = await findClosedPoints({ ...BUPYEONG, radius: 500, limit: 10_000 })
+    assert.equal(few.total, all.total)
+    assert.ok(few.points.length <= 5)
+  })
+
+  it('사라진 수는 measureChurn 과 일치한다', async (t) => {
+    if (!hasChurn) return t.skip('회전 데이터 없음')
+    const { findClosedPoints } = await import('../src/lib/places.ts')
+    const a = await measureChurn({ ...BUPYEONG, radius: 500 })
+    const b = await findClosedPoints({ ...BUPYEONG, radius: 500, limit: 10_000 })
+    assert.equal(a.closed, b.total, '패널 숫자와 지도 점 수가 다르면 둘 중 하나가 거짓말이다')
+  })
+})

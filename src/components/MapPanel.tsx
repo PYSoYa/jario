@@ -93,6 +93,17 @@ const DOT_TOUCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height
 <rect width="40" height="40" fill="transparent"/>
 <circle cx="20" cy="20" r="6.5" fill="#14111a" stroke="#ffffff" stroke-width="2.5"/></svg>`
 
+/**
+ * 사라진 자리.
+ *
+ * 속을 비운다. 검은 점이 "여기 있다"면 빈 원은 "여기 있었다"다 — 색이 아니라
+ * **형태**로 갈라야 색맹인 사람도 구분할 수 있고, 밀도가 겹쳐도 읽힌다.
+ * 살아 있는 점보다 눈에 덜 띄어야 한다. 기본 정보는 여전히 지금 있는 가게다.
+ */
+const DOT_CLOSED_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+<circle cx="9" cy="9" r="5.5" fill="none" stroke="#ffffff" stroke-width="3.5" stroke-opacity="0.85"/>
+<circle cx="9" cy="9" r="5.5" fill="none" stroke="#8a7f96" stroke-width="1.6"/></svg>`
+
 /** 선택한 업소만 분홍으로, 조금 더 크게. */
 const DOT_SELECTED_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
 <circle cx="13" cy="13" r="10" fill="#e0447f" fill-opacity="0.25"/>
@@ -326,6 +337,8 @@ export default function MapPanel() {
    * 다시 볼지는 사용자가 정한다.
    */
   const [movedTo, setMovedTo] = useState<{ lon: number; lat: number } | null>(null)
+  /** 사라진 자리 레이어. 기본은 꺼둔다 — 대부분은 지금 있는 가게만 보면 된다. */
+  const [showClosed, setShowClosed] = useState(false)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -627,6 +640,34 @@ export default function MapPanel() {
     placeholderData: keepPreviousData,
   })
 
+  /**
+   * 사라진 자리. 토글이 켜졌을 때만 부른다.
+   *
+   * /api/spot 에 합치지 않는다 — 기본이 꺼짐이라, 합치면 아무도 안 보는 점 300개를
+   * 매 요청 실어 나른다.
+   */
+  const closedQuery = useQuery({
+    queryKey: ['closed', center.lon, center.lat, radius, industry],
+    queryFn: async ({ signal }) => {
+      const q = new URLSearchParams({
+        lon: String(center.lon),
+        lat: String(center.lat),
+        radius: String(radius),
+      })
+      if (industry) q.set('industry', industry)
+      const res = await fetch(`/api/places/closed?${q}`, { signal })
+      if (!res.ok) throw new Error(`조회에 실패했습니다 (${res.status})`)
+      return res.json() as Promise<{
+        points: { lon: number; lat: number }[]
+        total: number
+        truncated: boolean
+      }>
+    },
+    enabled: showClosed,
+    staleTime: Infinity,
+    placeholderData: keepPreviousData,
+  })
+
   const stackQuery = useQuery({
     queryKey: ['stack', stackAt?.lon, stackAt?.lat],
     queryFn: async ({ signal }) => {
@@ -875,6 +916,40 @@ export default function MapPanel() {
       }),
     )
   }, [ready, markers, detailId, isNarrow])
+
+  /**
+   * 사라진 자리 레이어.
+   *
+   * 클러스터러에 넣지 않는다. 섞으면 뭉치의 숫자가 "지금 있는 가게 수"가 아니게 되고,
+   * 그건 이 지도가 답해야 할 첫 번째 질문을 망가뜨린다. 따로 그리고 따로 지운다.
+   */
+  const closedMarkers = useRef<kakao.maps.Marker[]>([])
+  useEffect(() => {
+    if (!ready || !map.current) return
+    const { kakao } = window
+
+    closedMarkers.current.forEach((m) => m.setMap(null))
+    closedMarkers.current = []
+
+    const pts = showClosed ? closedQuery.data?.points : undefined
+    if (!pts) return
+
+    const img = new kakao.maps.MarkerImage(
+      `data:image/svg+xml;utf8,${encodeURIComponent(DOT_CLOSED_SVG)}`,
+      new kakao.maps.Size(18, 18),
+      { offset: new kakao.maps.Point(9, 9) },
+    )
+    closedMarkers.current = pts.map((p) => {
+      const m = new kakao.maps.Marker({
+        position: new kakao.maps.LatLng(p.lat, p.lon),
+        image: img,
+        // 살아 있는 점보다 아래. 겹치면 지금 있는 가게가 위로 온다.
+        zIndex: 1,
+      })
+      m.setMap(map.current)
+      return m
+    })
+  }, [ready, showClosed, closedQuery.data])
 
   /**
    * 지도 중심이 분석 기준점에서 얼마나 벗어났나(m).
@@ -1521,6 +1596,35 @@ export default function MapPanel() {
                         <p className="text-xs text-muted">새로 생김</p>
                       </div>
                     </div>
+                    {/*
+                      숫자만으로는 반경 전체 합계라 골목 단위 쏠림이 안 보인다.
+                      지도에 얹으면 "이 골목이 죽고 있다"가 보인다.
+                    */}
+                    {spot.churn.closed > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowClosed((v) => !v)}
+                        aria-pressed={showClosed}
+                        className={`mt-3 flex w-full items-center gap-2 rounded border px-3 py-2 text-left text-xs transition-colors
+                          ${
+                            showClosed
+                              ? 'border-commerce text-commerce'
+                              : 'border-line text-muted hover:border-muted hover:text-paper'
+                          }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="inline-block h-3 w-3 shrink-0 rounded-full border-2"
+                          style={{ borderColor: showClosed ? '#e0447f' : '#8a7f96' }}
+                        />
+                        <span>{showClosed ? '사라진 자리 숨기기' : '사라진 자리 지도에 표시'}</span>
+                        {showClosed && closedQuery.data?.truncated && (
+                          <span className="ml-auto shrink-0 text-muted">
+                            {closedQuery.data.points.length}곳만
+                          </span>
+                        )}
+                      </button>
+                    )}
                     <p className="mt-2 text-xs leading-snug text-muted">
                       <span className="measure">{formatQuarter(spot.churn.from)}</span> 대비{' '}
                       <span className="measure">{formatQuarter(spot.churn.to)}</span> 기준입니다.

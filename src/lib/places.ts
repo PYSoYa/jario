@@ -565,3 +565,38 @@ export async function survivalByIndustry(p: {
     minPrev: MIN_PREV,
   }
 }
+
+/**
+ * 사라진 자리의 좌표.
+ *
+ * 패널은 "227곳 사라짐"이라고 말하지만 **어디서** 사라졌는지는 말하지 않는다.
+ * 반경 전체 합계라 골목 단위의 쏠림이 안 보인다. 지도에 얹으면 그게 보인다.
+ *
+ * 살아 있는 마커와 같은 표본 규칙(hashtext)을 쓴다. 가까운 순으로 자르면
+ * 사라진 곳이 중심에만 몰린 것처럼 보인다 — 살아 있는 쪽에서 이미 겪은 실수다.
+ */
+export async function findClosedPoints(p: {
+  lon: number
+  lat: number
+  radius: number
+  industry?: string
+  limit?: number
+}): Promise<{ points: { lon: number; lat: number }[]; total: number }> {
+  const limit = p.limit ?? 300
+  const rows = await sql<{ lon: number; lat: number; total: string }[]>`
+    WITH hit AS (
+      SELECT c.place_id, c.lon, c.lat
+      FROM place_closed c
+      WHERE ST_DWithin(c.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+        ${p.industry ? sql`AND c.industry_code LIKE ${p.industry + '%'}` : sql``}
+    )
+    SELECT h.lon, h.lat, count(*) OVER ()::text AS total
+    FROM hit h
+    ORDER BY hashtext(h.place_id)
+    LIMIT ${limit}
+  `
+  return {
+    points: rows.map((r) => ({ lon: r.lon, lat: r.lat })),
+    total: rows.length ? Number(rows[0].total) : 0,
+  }
+}
