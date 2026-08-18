@@ -1,6 +1,6 @@
 import { ImageResponse } from 'next/og'
 import { fmt, OG, OG_SIZE, ogFont, radiusLabel } from '@/lib/og'
-import { getReport } from '@/lib/reports'
+import { getReportCard } from '@/lib/reports'
 
 export const alt = '후보지 비교 리포트'
 export const size = OG_SIZE
@@ -14,7 +14,7 @@ export const contentType = 'image/png'
  */
 export default async function Image({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const report = await getReport(id)
+  const report = await getReportCard(id)
 
   const font = { name: 'NotoSansKR', data: ogFont, style: 'normal' as const, weight: 400 as const }
 
@@ -40,7 +40,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
     )
   }
 
-  const what = report.industry?.name
+  const what = report.industryName
   const aName = report.a.label ?? '후보지 A'
   const bName = report.b.label ?? '후보지 B'
 
@@ -96,7 +96,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
         </div>
 
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 48 }}>
-          {column(aName, report.a.total, report.a.targetCount)}
+          {column(aName, report.a.total, report.a.target)}
           <div
             style={{
               width: 2,
@@ -105,7 +105,7 @@ export default async function Image({ params }: { params: Promise<{ id: string }
               display: 'flex',
             }}
           />
-          {column(bName, report.b.total, report.b.targetCount)}
+          {column(bName, report.b.total, report.b.target)}
         </div>
 
         <div style={{ fontSize: 22, color: OG.muted, display: 'flex' }}>

@@ -57,6 +57,78 @@ export async function createReport(input: ReportInput): Promise<string> {
   return id
 }
 
+export type ReportCard = {
+  radius: number
+  industryName: string | null
+  dataVersion: string
+  a: { label: string | null; total: number; target: number | null }
+  b: { label: string | null; total: number; target: number | null }
+}
+
+/**
+ * OG 이미지용 최소 정보.
+ *
+ * getReport()는 LQ·상위 업종·최근접 업소까지 아홉 번을 조회하는데, 미리보기에
+ * 쓰이는 건 숫자 네 개뿐이다. 그걸 다 돌렸더니 이미지 생성이 13초가 걸렸다 —
+ * 카카오톡·슬랙 크롤러는 그 전에 끊는다. 필요한 것만 센다.
+ */
+export async function getReportCard(id: string): Promise<ReportCard | null> {
+  const [row] = await sql<
+    {
+      radius: number
+      industry_code: string | null
+      industry_name: string | null
+      a_lon: number
+      a_lat: number
+      a_label: string | null
+      b_lon: number
+      b_lat: number
+      b_label: string | null
+      data_version: string
+    }[]
+  >`
+    SELECT r.radius, r.industry_code, i.name AS industry_name,
+           r.a_lon, r.a_lat, r.a_label, r.b_lon, r.b_lat, r.b_label, r.data_version
+    FROM report r
+    LEFT JOIN industry i ON i.code = r.industry_code
+    WHERE r.id = ${id}
+  `
+  if (!row) return null
+
+  const count = (lon: number, lat: number) =>
+    sql<{ total: string; target: string | null }[]>`
+      SELECT
+        count(*)::text AS total,
+        ${row.industry_code
+          ? sql`count(*) FILTER (WHERE industry_code LIKE ${row.industry_code + '%'})::text`
+          : sql`NULL::text`} AS target
+      FROM place
+      WHERE ST_DWithin(geom, ST_MakePoint(${lon}, ${lat})::geography, ${row.radius})
+    `
+
+  const pa = count(row.a_lon, row.a_lat)
+  const pb = count(row.b_lon, row.b_lat)
+  pa.catch(() => {})
+  pb.catch(() => {})
+  const [[a], [b]] = await Promise.all([pa, pb])
+
+  return {
+    radius: row.radius,
+    industryName: row.industry_name,
+    dataVersion: row.data_version,
+    a: {
+      label: row.a_label,
+      total: Number(a.total),
+      target: a.target === null ? null : Number(a.target),
+    },
+    b: {
+      label: row.b_label,
+      total: Number(b.total),
+      target: b.target === null ? null : Number(b.target),
+    },
+  }
+}
+
 export async function getReport(id: string): Promise<Report | null> {
   const [row] = await sql<
     {

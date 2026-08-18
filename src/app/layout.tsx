@@ -32,8 +32,13 @@ const plexMono = IBM_Plex_Mono({
 })
 
 export const metadata: Metadata = {
+  // Vercel이 별칭을 여러 개 준다(jario-tan / jario-pysoya1 / jario-git-main).
+  // 지정하지 않으면 og:image가 그때그때 다른 도메인으로 나가서, 공유된 링크마다
+  // 주소가 달라진다. 정규 주소를 하나로 고정한다.
+  metadataBase: new URL('https://jario-pysoya1.vercel.app'),
   title: 'jario — 창업 상권 분석',
-  description: '자리를 찍으면 반경 안의 경쟁 밀도를 계산합니다. 인천 상가업소 데이터 기반.',
+  description:
+    '자리를 찍으면 반경 안의 경쟁 밀도를 계산합니다. 서울·인천 상가업소 691,087곳 기반.',
 }
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {
