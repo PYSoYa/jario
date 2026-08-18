@@ -291,6 +291,14 @@ export default function MapPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   /** 상세를 열기 전 서랍 높이. 닫을 때 되돌린다. */
   const [snapBeforeDetail, setSnapBeforeDetail] = useState<number | null>(null)
+  /**
+   * 마커를 눌렀을 때 그 자리에 겹쳐 있는 업소들.
+   *
+   * 서울·인천 업소의 85%가 다른 업소와 좌표가 같다(건물 단위 지오코딩,
+   * 한 지점 최대 1,040곳). 마커 하나가 곧 업소 하나가 아니라서,
+   * 위에 있는 것만 열어주면 나머지는 닿을 방법이 없다.
+   */
+  const [stackAt, setStackAt] = useState<{ lon: number; lat: number } | null>(null)
   const [view, setView] = useState<'spot' | 'dong'>('spot')
 
   const heightFor = (i: number) =>
@@ -372,6 +380,25 @@ export default function MapPanel() {
    * 바꿔놓으면 눌렀는데 아무 일도 안 일어난 것처럼 보인다. 상세가 보이는
    * 높이까지 올려준다. 이미 더 올라가 있으면 건드리지 않는다.
    */
+  /** 마커를 눌렀을 때. 그 자리에 뭐가 있는지부터 보여준다. */
+  const openStack = useCallback(
+    (at: { lon: number; lat: number }) => {
+      setSelectedId(null)
+      setStackAt(at)
+      if (!isNarrow) return
+      setSnapBeforeDetail((prev) => prev ?? snap)
+      if (snap < 1) gotoSnap(1)
+      window.setTimeout(
+        () => {
+          map.current?.panTo(new window.kakao.maps.LatLng(at.lat, at.lon))
+          keepVisible()
+        },
+        snap < 1 ? 260 : 0,
+      )
+    },
+    [isNarrow, snap, gotoSnap, keepVisible],
+  )
+
   const selectPlace = useCallback(
     (placeId: string, at?: { lon: number; lat: number }) => {
       setSelectedId(placeId)
@@ -397,14 +424,15 @@ export default function MapPanel() {
    * 의존성 배열에 selectPlace를 직접 넣으면 서랍을 움직일 때마다(snap 변경)
    * 마커 500개가 통째로 다시 만들어진다. 콜백만 갈아끼운다.
    */
-  const selectPlaceRef = useRef(selectPlace)
+  const openStackRef = useRef(openStack)
   useEffect(() => {
-    selectPlaceRef.current = selectPlace
-  }, [selectPlace])
+    openStackRef.current = openStack
+  }, [openStack])
 
   /** 상세를 닫고 원래 서랍 높이로 돌아간다. */
   const closeDetail = useCallback(() => {
     setSelectedId(null)
+    setStackAt(null)
     if (snapBeforeDetail !== null) {
       gotoSnap(snapBeforeDetail)
       setSnapBeforeDetail(null)
@@ -542,14 +570,38 @@ export default function MapPanel() {
     placeholderData: keepPreviousData,
   })
 
-  const detailQuery = useQuery({
-    queryKey: ['place', selectedId],
+  const stackQuery = useQuery({
+    queryKey: ['stack', stackAt?.lon, stackAt?.lat],
     queryFn: async ({ signal }) => {
-      const res = await fetch(`/api/places/${selectedId}`, { signal })
+      const res = await fetch(`/api/places/at?lon=${stackAt!.lon}&lat=${stackAt!.lat}`, { signal })
+      if (!res.ok) throw new Error(`조회에 실패했습니다 (${res.status})`)
+      return res.json() as Promise<{
+        total: number
+        buildingName: string | null
+        roadAddress: string | null
+        places: { placeId: string; name: string; industryName: string; floorNo: number | null }[]
+      }>
+    },
+    enabled: stackAt !== null,
+  })
+
+  /**
+   * 겹친 게 한 곳뿐이면 목록을 거칠 이유가 없다.
+   * 상태를 바꾸지 않고 파생값으로 둔다 — effect에서 setState 하면 렌더가 한 번 더 돌고,
+   * React 19의 set-state-in-effect 규칙에도 걸린다.
+   */
+  const soleStackId =
+    stackQuery.data?.total === 1 ? (stackQuery.data.places[0]?.placeId ?? null) : null
+  const detailId = selectedId ?? soleStackId
+
+  const detailQuery = useQuery({
+    queryKey: ['place', detailId],
+    queryFn: async ({ signal }) => {
+      const res = await fetch(`/api/places/${detailId}`, { signal })
       if (!res.ok) throw new Error(`업소 정보를 불러오지 못했습니다 (${res.status})`)
       return res.json() as Promise<PlaceDetail>
     },
-    enabled: selectedId !== null,
+    enabled: detailId !== null,
   })
 
   const detail = detailQuery.data ?? null
@@ -645,6 +697,7 @@ export default function MapPanel() {
       clickTimer.current = window.setTimeout(() => {
         setNotice(null)
         setSelectedId(null)
+        setStackAt(null)
         setCenter({ lat, lon })
       }, 260)
     })
@@ -744,7 +797,7 @@ export default function MapPanel() {
     clusterer.current.clear()
     clusterer.current.addMarkers(
       markers.map((p) => {
-        const isSelected = p.placeId === selectedId
+        const isSelected = p.placeId === detailId
         const marker = new kakao.maps.Marker({
           position: new kakao.maps.LatLng(p.lat, p.lon),
           title: p.name,
@@ -754,12 +807,12 @@ export default function MapPanel() {
         // 어떤 업소인지는 클로저로 안다. 마커 클릭은 자리 선택이 아니라 상세 보기다.
         kakao.maps.event.addListener(marker, 'click', () => {
           window.clearTimeout(clickTimer.current) // 지도 클릭(자리 이동)으로 번지지 않게
-          selectPlaceRef.current(p.placeId, { lon: p.lon, lat: p.lat })
+          openStackRef.current({ lon: p.lon, lat: p.lat })
         })
         return marker
       }),
     )
-  }, [ready, markers, selectedId, isNarrow])
+  }, [ready, markers, detailId, isNarrow])
 
   /**
    * 지도 중심이 분석 기준점에서 얼마나 벗어났나(m).
@@ -774,7 +827,7 @@ export default function MapPanel() {
   })()
 
   /** 좁은 화면에서 업소 상세를 보는 중인가. 그동안은 검색·필터·탭을 감춘다. */
-  const detailMode = isNarrow && selectedId !== null && view === 'spot'
+  const detailMode = isNarrow && (detailId !== null || stackAt !== null) && view === 'spot'
 
   const appKey = process.env.NEXT_PUBLIC_KAKAO_MAP_KEY
   const max = context?.breakdown[0]?.count ?? 0
@@ -1180,7 +1233,61 @@ export default function MapPanel() {
             )
           ) : error ? (
             <p className="px-5 py-6 text-sm text-paper">{error.message}</p>
-          ) : selectedId ? (
+          ) : stackAt && !detailId ? (
+            /* 마커를 누르면 그 자리에 겹친 업소부터 보여준다.
+               한 곳뿐이면 목록이 아니라 바로 상세로 보내는 게 자연스럽다. */
+            <div className="px-5 py-4">
+              <button
+                type="button"
+                onClick={closeDetail}
+                className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-paper"
+              >
+                <span aria-hidden="true">←</span> 목록으로
+              </button>
+
+              {stackQuery.isPending && <p className="text-sm text-muted">불러오는 중…</p>}
+              {stackQuery.error && (
+                <p className="text-sm text-paper">{(stackQuery.error as Error).message}</p>
+              )}
+
+              {stackQuery.data && (
+                <>
+                  <h2 className="text-lg font-semibold text-paper">
+                    이 위치에 <span className="measure text-commerce">{stackQuery.data.total}</span>곳
+                  </h2>
+                  <p className="mt-1 text-xs leading-snug text-muted">
+                    {stackQuery.data.buildingName ?? stackQuery.data.roadAddress ?? '같은 좌표'}
+                    {stackQuery.data.total > stackQuery.data.places.length &&
+                      ` · ${stackQuery.data.places.length}곳만 표시`}
+                  </p>
+
+                  <ul className="mt-4 space-y-0.5">
+                    {stackQuery.data.places.map((q) => (
+                      <li key={q.placeId}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(q.placeId)}
+                          className="flex w-full items-baseline justify-between gap-3 rounded px-2 py-1.5 text-left transition-colors hover:bg-raised"
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm text-paper">{q.name}</span>
+                            <span className="block truncate text-xs text-muted">
+                              {q.industryName}
+                            </span>
+                          </span>
+                          {q.floorNo !== null && (
+                            <span className="measure shrink-0 text-xs text-muted">
+                              {q.floorNo < 0 ? `지하 ${-q.floorNo}층` : `${q.floorNo}층`}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          ) : detailId ? (
             <div className="px-5 py-4">
               <button
                 type="button"

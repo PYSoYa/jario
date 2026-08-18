@@ -73,6 +73,68 @@ export async function countNearby(p: Omit<NearbyParams, 'limit' | 'order'>): Pro
   return Number(row.n)
 }
 
+export type StackedPlace = {
+  placeId: string
+  name: string
+  industryName: string
+  floorNo: number | null
+}
+
+/**
+ * 한 지점에 겹쳐 있는 업소들.
+ *
+ * 서울·인천 업소의 85%가 다른 업소와 좌표가 완전히 같다. 건물 단위로
+ * 지오코딩돼서 같은 건물이면 같은 점을 쓴다(한 지점 최대 1,040곳).
+ * 마커를 누르면 위에 있는 하나만 열리는 게 아니라 그 자리에 뭐가 있는지를 보여준다.
+ *
+ * 좌표가 완전히 같은 것만 찾지 않고 1m 반경으로 잡는다 — 소수점 끝자리가
+ * 다른 경우가 있고, GiST 인덱스를 그대로 탄다.
+ */
+export async function findPlacesAt(p: {
+  lon: number
+  lat: number
+  limit?: number
+}): Promise<{ total: number; buildingName: string | null; roadAddress: string | null; places: StackedPlace[] }> {
+  const limit = p.limit ?? 50
+  const rows = await sql<
+    {
+      place_id: string
+      name: string
+      industry_name: string
+      floor_no: number | null
+      building_name: string | null
+      road_address: string | null
+      total: string
+    }[]
+  >`
+    WITH hit AS (
+      SELECT p.*
+      FROM place p
+      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, 1)
+    )
+    SELECT h.place_id, h.name, i.name AS industry_name, h.floor_no,
+           h.building_name, h.road_address,
+           count(*) OVER ()::text AS total
+    FROM hit h
+    JOIN industry i ON i.code = h.industry_code
+    -- 층이 있으면 낮은 층부터. 1층 가게가 먼저 보이는 편이 자연스럽다.
+    ORDER BY h.floor_no NULLS LAST, h.name
+    LIMIT ${limit}
+  `
+
+  return {
+    total: rows.length > 0 ? Number(rows[0].total) : 0,
+    buildingName: rows[0]?.building_name ?? null,
+    roadAddress: rows[0]?.road_address ?? null,
+    places: rows.map((r) => ({
+      placeId: r.place_id,
+      name: r.name,
+      industryName: r.industry_name,
+      floorNo: r.floor_no,
+    })),
+  }
+}
+
 export type PlaceDetail = {
   placeId: string
   name: string
