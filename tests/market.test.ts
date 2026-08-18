@@ -40,8 +40,12 @@ describe('findMarketDistrict', () => {
     assert.equal(row.n, 0, `좌표가 겹치는 상권 그룹이 ${row.n}개 있다`)
   })
 
-  it('상권은 자기 시도 안에 있다', async () => {
+  it('상권은 자기 시도 안에 있다', async (t) => {
     const { sql } = await import('../src/lib/db.ts')
+    // 이 검사도 '가장 가까운 업소'로 판정하므로 전체 데이터가 있어야 한다.
+    // 픽스처는 행정동 11개뿐이라 까치산역의 최근접 업소가 인천이 된다.
+    const [{ n: loaded }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM place`
+    if (loaded < 100_000) return t.skip(`부분 데이터(${loaded}행)`)
     const rows = await sql<{ name: string; sido: string; near: string }[]>`
       SELECT d.name, d.sido,
              (SELECT p.sido_name FROM place p ORDER BY p.geom <-> d.geom LIMIT 1) AS near
@@ -52,13 +56,15 @@ describe('findMarketDistrict', () => {
     }
   })
 
-  it('연신내는 은평구다', async () => {
+  it('연신내는 은평구다', async (t) => {
     // 0011에서 중랑구 신내2동에 찍혀 있었다(15.4km). 상권명을 행정동에 맞출 때
     // 접미어까지 보게 했더니 '연신내'의 '신내'가 중랑구 신내동에 걸렸다.
     //
     // 밀도 검사로는 못 잡는다 — 신내2동도 번화해서 점이 많다. 엉뚱한 자리에
     // 그럴듯하게 찍히는 종류라, 서로 다른 방법으로 구한 좌표를 대조해야 드러났다.
     const { sql } = await import('../src/lib/db.ts')
+    const [{ n: loaded }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM place`
+    if (loaded < 100_000) return t.skip(`부분 데이터(${loaded}행)`)
     const [row] = await sql<{ near: string }[]>`
       SELECT (SELECT p.sigungu_name FROM place p ORDER BY p.geom <-> d.geom LIMIT 1) AS near
       FROM market_district d WHERE d.name = '연신내'
