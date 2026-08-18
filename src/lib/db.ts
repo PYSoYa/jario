@@ -27,9 +27,10 @@ const usesPooler = /pooler\.supabase\.com|:6543/.test(connectionString)
 
 function create() {
   return postgres(connectionString!, {
-    // 인스턴스 수만큼 곱해지므로 작게 잡되, 1로 두면 목록·집계처럼 병렬로 보낸
-    // 쿼리가 한 줄로 서서 응답 시간이 그대로 두 배가 된다.
-    max: process.env.NODE_ENV === 'production' ? 3 : 10,
+    // 한 요청이 병렬로 보내는 쿼리 수(현재 최대 5)보다 커야 한다.
+    // 3으로 뒀을 때 /api/spot 이 성공과 504를 번갈아 냈다 — 쿼리가 커넥션을
+    // 기다리다 함수 타임아웃까지 갔다. 쿼리 2개짜리 엔드포인트는 멀쩡했다.
+    max: process.env.NODE_ENV === 'production' ? 8 : 10,
     prepare: !usesPooler,
 
     // 공간 쿼리는 종종 수백 ms가 걸린다. 개발 중 느린 쿼리를 놓치지 않도록 넉넉히 두되
@@ -37,9 +38,8 @@ function create() {
     idle_timeout: 20,
     connect_timeout: 10,
 
-    // 쿼리가 막히면 15초에 끊는다. 이게 없으면 서버리스 함수가 300초까지
-    // 붙잡혀 있다가 타임아웃으로 죽고, 그동안 커넥션도 물고 있다.
-    connection: { statement_timeout: 15_000 },
+    // statement_timeout 을 시작 파라미터로 보내는 것은 트랜잭션 모드 풀러에서
+    // 지원 여부가 불확실해 넣지 않는다. 대신 라우트의 maxDuration 으로 막는다.
     // 좌표는 double precision으로 오는데 postgres.js 기본 파서면 충분하다.
     // BIGINT는 JS number 정밀도를 넘길 수 있어 문자열로 받는다.
     types: {
