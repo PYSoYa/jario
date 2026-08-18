@@ -167,10 +167,10 @@ export default async function ReportPage({ params }: PageProps<'/r/[id]'>) {
         </p>
       )}
 
-      <table className="mt-8 w-full border-collapse">
+      <table className="mt-8 w-full table-fixed border-collapse">
         <thead>
           <tr>
-            <th className="w-32 pb-3 text-left text-xs font-medium tracking-wide text-muted md:w-44">
+            <th className="w-[38%] pb-3 pr-3 text-left text-xs font-medium tracking-wide text-muted sm:w-32 md:w-44">
               항목
             </th>
             <th className="pb-3 pr-4 text-left text-sm font-semibold text-paper">{aName}</th>
