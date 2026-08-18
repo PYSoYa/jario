@@ -249,6 +249,7 @@ export default function MapPanel() {
   const pin = useRef<kakao.maps.CustomOverlay | null>(null)
   const clusterer = useRef<kakao.maps.MarkerClusterer | null>(null)
   const clickTimer = useRef<number | undefined>(undefined)
+  const searchTimer = useRef<number | undefined>(undefined)
 
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -277,6 +278,14 @@ export default function MapPanel() {
   const [searchNote, setSearchNote] = useState<string | null>(null)
   /** 키보드로 훑고 있는 검색 결과. -1이면 입력창에 머물러 있다. */
   const [activeHit, setActiveHit] = useState(-1)
+  /**
+   * 지도를 움직였는데 분석은 이전 자리 기준으로 남아 있는 상태.
+   *
+   * 지도 앱들은 이럴 때 "이 지역 재검색"을 띄운다. 자동으로 다시 계산하면
+   * 손가락을 뗄 때마다 조회가 나가고, 사용자가 고른 자리도 제멋대로 바뀐다.
+   * 다시 볼지는 사용자가 정한다.
+   */
+  const [movedTo, setMovedTo] = useState<{ lon: number; lat: number } | null>(null)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -413,8 +422,8 @@ export default function MapPanel() {
     [],
   )
 
-  const search = useCallback(() => {
-    const q = query.trim()
+  const search = useCallback((raw?: string) => {
+    const q = (raw ?? query).trim()
     if (!q) return
     if (!window.kakao?.maps?.services) {
       setSearchNote('검색 기능을 불러오지 못했습니다.')
@@ -644,6 +653,13 @@ export default function MapPanel() {
       window.clearTimeout(clickTimer.current)
     })
 
+    // 지도가 멈출 때마다 분석 기준점에서 얼마나 벗어났는지 본다.
+    kakao.maps.event.addListener(map.current, 'idle', () => {
+      const c = map.current?.getCenter()
+      if (!c) return
+      setMovedTo({ lon: c.getLng(), lat: c.getLat() })
+    })
+
     setReady(true)
     locate({ silent: true })
   }, [locate])
@@ -745,6 +761,18 @@ export default function MapPanel() {
     )
   }, [ready, markers, selectedId, isNarrow])
 
+  /**
+   * 지도 중심이 분석 기준점에서 얼마나 벗어났나(m).
+   * 반경의 40%를 넘으면 "다른 곳을 보고 있다"고 판단한다 — 조금 흔들린 정도로
+   * 버튼이 뜨면 성가시다.
+   */
+  const movedAway = (() => {
+    if (!movedTo) return false
+    const dLat = (movedTo.lat - center.lat) * 111_000
+    const dLon = (movedTo.lon - center.lon) * 111_000 * Math.cos((center.lat * Math.PI) / 180)
+    return Math.hypot(dLat, dLon) > radius * 0.4
+  })()
+
   /** 좁은 화면에서 업소 상세를 보는 중인가. 그동안은 검색·필터·탭을 감춘다. */
   const detailMode = isNarrow && selectedId !== null && view === 'spot'
 
@@ -780,6 +808,63 @@ export default function MapPanel() {
       ) : null}
 
       <div ref={mapRef} className="map-canvas bg-surface" />
+
+      {/* 지도 위 컨트롤. 지도 앱들이 쓰는 자리다 — 패널 안에 묻어두면
+          지도를 보는 중에 손이 닿지 않는다. */}
+      {ready && !failed && (
+        <>
+          {/* 지도를 옮겼는데 분석은 이전 자리 그대로다. 다시 볼지는 사용자가 정한다. */}
+          {movedAway && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!movedTo) return
+                setSelectedId(null)
+                setNotice(null)
+                setCenter(movedTo)
+              }}
+              className="absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-full border border-commerce bg-ink/95 px-4 py-2 text-sm text-paper shadow-lg backdrop-blur transition-colors hover:bg-raised"
+            >
+              <span aria-hidden="true" className="mr-1.5">↻</span>이 지역에서 다시 찾기
+            </button>
+          )}
+
+          <div
+            className="absolute right-3 z-20 flex flex-col gap-2 md:right-4"
+            style={{ bottom: isNarrow ? sheetHeight + 12 : 24 }}
+          >
+            <button
+              type="button"
+              onClick={() => locate({ silent: false })}
+              disabled={locating}
+              aria-label="현재 위치로 이동"
+              className="grid h-11 w-11 place-items-center rounded-full border border-line bg-ink/95 text-lg text-paper shadow-lg backdrop-blur transition-colors hover:bg-raised disabled:opacity-50"
+            >
+              {locating ? '…' : '◎'}
+            </button>
+            {/* 모바일은 핀치만으로 확대해야 했다. 한 손으로 쓸 때 불편하다. */}
+            <div className="flex flex-col overflow-hidden rounded-full border border-line bg-ink/95 shadow-lg backdrop-blur">
+              <button
+                type="button"
+                onClick={() => map.current?.setLevel(Math.max(1, (map.current?.getLevel() ?? 4) - 1))}
+                aria-label="확대"
+                className="grid h-11 w-11 place-items-center text-lg text-paper transition-colors hover:bg-raised"
+              >
+                +
+              </button>
+              <div className="mx-2 h-px bg-line" />
+              <button
+                type="button"
+                onClick={() => map.current?.setLevel(Math.min(14, (map.current?.getLevel() ?? 4) + 1))}
+                aria-label="축소"
+                className="grid h-11 w-11 place-items-center text-lg text-paper transition-colors hover:bg-raised"
+              >
+                −
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {(!appKey || failed) && (
         <div className="absolute inset-0 grid place-items-center p-6 text-center">
@@ -895,12 +980,21 @@ export default function MapPanel() {
                 type="search"
                 value={query}
                 onChange={(e) => {
-                  setQuery(e.target.value)
+                  const v = e.target.value
+                  setQuery(v)
                   setSearchNote(null)
                   // 입력이 바뀌면 지금 떠 있는 결과는 옛 검색어의 것이다.
                   // type=search 의 기본 X 버튼도 여기로 들어오므로, 지우면 목록도 닫힌다.
                   setHits(null)
                   setActiveHit(-1)
+
+                  // 타이핑하는 동안 알아서 찾아준다. 엔터를 눌러야만 하면 한 번 더 손이 간다.
+                  // 다만 글자마다 호출하면 카카오 Local API 쿼터를 빠르게 쓴다 —
+                  // 멈춘 뒤에 한 번만 부른다.
+                  window.clearTimeout(searchTimer.current)
+                  if (v.trim().length >= 2) {
+                    searchTimer.current = window.setTimeout(() => search(v), 300)
+                  }
                 }}
                 onKeyDown={(e) => {
                   if (!hits || hits.length === 0) return

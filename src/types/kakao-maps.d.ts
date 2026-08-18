@@ -15,6 +15,7 @@ declare namespace kakao.maps {
     setCenter(latlng: LatLng): void
     getLevel(): number
     setLevel(level: number): void
+    getCenter(): LatLng
     panTo(latlng: LatLng): void
     /** 지도를 픽셀 단위로 이동한다. 화면 일부가 패널에 가릴 때 보정용. */
     panBy(dx: number, dy: number): void
@@ -89,6 +90,12 @@ declare namespace kakao.maps {
       target: Map,
       type: 'click' | 'dblclick',
       handler: (mouseEvent: { latLng: LatLng }) => void,
+    ): void
+    /** 지도 이동·확대가 끝났을 때. 인자를 주지 않는다. */
+    function addListener(
+      target: Map,
+      type: 'idle' | 'dragend' | 'zoom_changed',
+      handler: () => void,
     ): void
     /** 마커 클릭은 좌표 인자를 주지 않는다 — 어떤 마커인지는 클로저로 안다. */
     function addListener(target: Marker, type: 'click', handler: () => void): void
