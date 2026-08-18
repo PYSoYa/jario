@@ -83,6 +83,16 @@ function withinCoverage(lon: number, lat: number) {
 const DOT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
 <circle cx="10" cy="10" r="6.5" fill="#14111a" stroke="#ffffff" stroke-width="2.5"/></svg>`
 
+/**
+ * 손가락용 마커. 보이는 점은 같고 주변 여백만 넓힌다.
+ *
+ * 20px 점은 마우스로는 충분한데 손가락으로는 빗나간다. 권장 터치 타깃은 44px다.
+ * 점을 키우면 지도가 지저분해지므로, 투명한 여백을 둘러 누를 수 있는 면적만 넓힌다.
+ */
+const DOT_TOUCH_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40">
+<rect width="40" height="40" fill="transparent"/>
+<circle cx="20" cy="20" r="6.5" fill="#14111a" stroke="#ffffff" stroke-width="2.5"/></svg>`
+
 /** 선택한 업소만 분홍으로, 조금 더 크게. */
 const DOT_SELECTED_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
 <circle cx="13" cy="13" r="10" fill="#e0447f" fill-opacity="0.25"/>
@@ -270,6 +280,8 @@ export default function MapPanel() {
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  /** 상세를 열기 전 서랍 높이. 닫을 때 되돌린다. */
+  const [snapBeforeDetail, setSnapBeforeDetail] = useState<number | null>(null)
   const [view, setView] = useState<'spot' | 'dong'>('spot')
 
   const heightFor = (i: number) =>
@@ -343,6 +355,52 @@ export default function MapPanel() {
     }
     gotoSnap(best)
   }
+
+  /**
+   * 업소를 고른다. 마커를 누르든 목록에서 누르든 여기로 온다.
+   *
+   * 모바일에서는 서랍이 요약(7.5%)에 접혀 있을 수 있다. 그 상태로 상세만
+   * 바꿔놓으면 눌렀는데 아무 일도 안 일어난 것처럼 보인다. 상세가 보이는
+   * 높이까지 올려준다. 이미 더 올라가 있으면 건드리지 않는다.
+   */
+  const selectPlace = useCallback(
+    (placeId: string, at?: { lon: number; lat: number }) => {
+      setSelectedId(placeId)
+      if (!isNarrow) return
+
+      setSnapBeforeDetail((prev) => prev ?? snap)
+      if (snap < 1) gotoSnap(1)
+
+      // 고른 업소가 서랍에 가리지 않게 지도도 옮긴다.
+      if (at) {
+        window.setTimeout(() => {
+          map.current?.panTo(new window.kakao.maps.LatLng(at.lat, at.lon))
+          keepVisible()
+        }, snap < 1 ? 260 : 0)
+      }
+    },
+    [isNarrow, snap, gotoSnap, keepVisible],
+  )
+
+  /**
+   * 마커 이벤트 핸들러가 참조할 최신 selectPlace.
+   *
+   * 의존성 배열에 selectPlace를 직접 넣으면 서랍을 움직일 때마다(snap 변경)
+   * 마커 500개가 통째로 다시 만들어진다. 콜백만 갈아끼운다.
+   */
+  const selectPlaceRef = useRef(selectPlace)
+  useEffect(() => {
+    selectPlaceRef.current = selectPlace
+  }, [selectPlace])
+
+  /** 상세를 닫고 원래 서랍 높이로 돌아간다. */
+  const closeDetail = useCallback(() => {
+    setSelectedId(null)
+    if (snapBeforeDetail !== null) {
+      gotoSnap(snapBeforeDetail)
+      setSnapBeforeDetail(null)
+    }
+  }, [snapBeforeDetail, gotoSnap])
 
   /** 검색 결과나 내 위치로 자리를 옮긴다. */
   const goTo = useCallback(
@@ -649,11 +707,18 @@ export default function MapPanel() {
     if (!ready || !map.current || !clusterer.current || !markers) return
     const { kakao } = window
 
-    const dot = new kakao.maps.MarkerImage(
-      `data:image/svg+xml;utf8,${encodeURIComponent(DOT_SVG)}`,
-      new kakao.maps.Size(20, 20),
-      { offset: new kakao.maps.Point(10, 10) },
-    )
+    // 좁은 화면에서는 누를 수 있는 면적을 넓힌 이미지를 쓴다. 보이는 점은 같다.
+    const dot = isNarrow
+      ? new kakao.maps.MarkerImage(
+          `data:image/svg+xml;utf8,${encodeURIComponent(DOT_TOUCH_SVG)}`,
+          new kakao.maps.Size(40, 40),
+          { offset: new kakao.maps.Point(20, 20) },
+        )
+      : new kakao.maps.MarkerImage(
+          `data:image/svg+xml;utf8,${encodeURIComponent(DOT_SVG)}`,
+          new kakao.maps.Size(20, 20),
+          { offset: new kakao.maps.Point(10, 10) },
+        )
     const dotSelected = new kakao.maps.MarkerImage(
       `data:image/svg+xml;utf8,${encodeURIComponent(DOT_SELECTED_SVG)}`,
       new kakao.maps.Size(26, 26),
@@ -673,12 +738,15 @@ export default function MapPanel() {
         // 어떤 업소인지는 클로저로 안다. 마커 클릭은 자리 선택이 아니라 상세 보기다.
         kakao.maps.event.addListener(marker, 'click', () => {
           window.clearTimeout(clickTimer.current) // 지도 클릭(자리 이동)으로 번지지 않게
-          setSelectedId(p.placeId)
+          selectPlaceRef.current(p.placeId, { lon: p.lon, lat: p.lat })
         })
         return marker
       }),
     )
-  }, [ready, markers, selectedId])
+  }, [ready, markers, selectedId, isNarrow])
+
+  /** 좁은 화면에서 업소 상세를 보는 중인가. 그동안은 검색·필터·탭을 감춘다. */
+  const detailMode = isNarrow && selectedId !== null && view === 'spot'
 
   const appKey = process.env.NEXT_PUBLIC_KAKAO_MAP_KEY
   const max = context?.breakdown[0]?.count ?? 0
@@ -810,8 +878,10 @@ export default function MapPanel() {
             <span aria-hidden="true">◎</span>
             {locating ? '위치 찾는 중' : '내 위치로'}
           </button>
-          {/* 장소 검색. 내 위치만으로는 다른 동네를 볼 수 없다. */}
-          <div className="relative mt-3">
+          {/* 장소 검색. 내 위치만으로는 다른 동네를 볼 수 없다.
+              업소 하나를 들여다보는 중에는 검색·필터가 필요 없다. 좁은 화면에서는
+              그 자리를 상세에 내준다 — 안 그러면 정작 정보가 화면 밖으로 밀린다. */}
+          <div className={`relative mt-3 ${detailMode ? 'hidden md:block' : ''}`}>
             <form
               onSubmit={(e) => {
                 e.preventDefault()
@@ -899,7 +969,7 @@ export default function MapPanel() {
         </header>
 
         {/* 좁은 화면에서는 필터도 접어둔다. 늘 보일 필요는 없고, 그만큼 내용이 넓어진다. */}
-        <div className="shrink-0 border-b border-line md:hidden">
+        <div className={`shrink-0 border-b border-line md:hidden ${detailMode ? 'hidden' : ''}`}>
           <button
             type="button"
             onClick={() => setFiltersOpen((v) => !v)}
@@ -916,7 +986,7 @@ export default function MapPanel() {
         </div>
 
         <div
-          className={`${filtersOpen ? 'block' : 'hidden'} shrink-0 space-y-3 border-b border-line px-5 pb-4 pt-1 md:block md:py-4`}
+          className={`${filtersOpen && !detailMode ? 'block' : 'hidden'} shrink-0 space-y-3 border-b border-line px-5 pb-4 pt-1 md:block md:py-4`}
         >
           <fieldset>
             <legend className="mb-2 text-xs font-medium tracking-wide text-muted">반경</legend>
@@ -968,7 +1038,7 @@ export default function MapPanel() {
         <div
           role="tablist"
           aria-label="분석 방식"
-          className="flex shrink-0 gap-1 border-b border-line px-5 py-2"
+          className={`flex shrink-0 gap-1 border-b border-line px-5 py-2 ${detailMode ? 'hidden md:flex' : ''}`}
         >
           {(
             [
@@ -1016,7 +1086,7 @@ export default function MapPanel() {
             <div className="px-5 py-4">
               <button
                 type="button"
-                onClick={() => setSelectedId(null)}
+                onClick={closeDetail}
                 className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted transition-colors hover:text-paper"
               >
                 <span aria-hidden="true">←</span> 목록으로
@@ -1252,7 +1322,7 @@ export default function MapPanel() {
                       <li key={p.placeId}>
                         <button
                           type="button"
-                          onClick={() => setSelectedId(p.placeId)}
+                          onClick={() => selectPlace(p.placeId, { lon: p.lon, lat: p.lat })}
                           className="flex w-full items-baseline justify-between gap-3 rounded px-2 py-1.5 text-left transition-colors hover:bg-raised"
                         >
                           <span className="min-w-0">
