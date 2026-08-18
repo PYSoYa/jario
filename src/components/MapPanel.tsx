@@ -897,6 +897,10 @@ export default function MapPanel() {
                 onChange={(e) => {
                   setQuery(e.target.value)
                   setSearchNote(null)
+                  // 입력이 바뀌면 지금 떠 있는 결과는 옛 검색어의 것이다.
+                  // type=search 의 기본 X 버튼도 여기로 들어오므로, 지우면 목록도 닫힌다.
+                  setHits(null)
+                  setActiveHit(-1)
                 }}
                 onKeyDown={(e) => {
                   if (!hits || hits.length === 0) return
