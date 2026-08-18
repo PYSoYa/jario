@@ -413,3 +413,55 @@ export async function measureChurn(p: {
  */
 export const CHURN_FROM = 202512
 export const CHURN_TO = 202606
+
+export type MarketDistrict = {
+  name: string
+  /** 이 자리에서 상권 대표점까지 거리(m) */
+  distanceM: number
+  /** 공실률 % */
+  vacancyRate: number | null
+  /** 임대료 천원/㎡ */
+  rentPerM2: number | null
+}
+
+/**
+ * 조사 상권까지 인정하는 최대 거리.
+ *
+ * 조사에는 상권 경계가 없다(구획도가 JPG 이미지다). 대표점 하나로 근사하므로,
+ * 멀어지면 그 값은 이 자리와 무관해진다. 실측으로 정했다 —
+ * 부평역 527m, 강남역 135m 는 맞고, 김포공항 4.5km · 영종도 15.5km 는 아니다.
+ * 3km 를 넘으면 숫자를 내놓느니 아무것도 안 내놓는 편이 낫다.
+ */
+const MARKET_MAX_M = 3000
+
+/**
+ * 이 자리에서 가장 가까운 조사 상권의 공실률·임대료.
+ *
+ * "이 자리의 공실률"이 아니다. 경계를 모르므로 소속을 판정할 수 없고,
+ * 화면에도 거리를 함께 적는다. 없으면 null 이다 — 억지로 채우지 않는다.
+ */
+export async function findMarketDistrict(p: {
+  lon: number
+  lat: number
+}): Promise<MarketDistrict | null> {
+  // KNN(<->)으로 가장 가까운 하나만 집는다. 68행이라 어떻게 해도 빠르지만,
+  // 인덱스를 타는 형태로 두면 상권이 늘어도 그대로 쓸 수 있다.
+  const [row] = await sql<
+    { name: string; distance_m: number; vacancy: string | null; rent: string | null }[]
+  >`
+    SELECT d.name,
+           ST_Distance(d.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography) AS distance_m,
+           d.vacancy_rate::text AS vacancy,
+           d.rent_per_m2::text  AS rent
+    FROM market_district d
+    ORDER BY d.geom <-> ST_MakePoint(${p.lon}, ${p.lat})::geography
+    LIMIT 1
+  `
+  if (!row || row.distance_m > MARKET_MAX_M) return null
+  return {
+    name: row.name,
+    distanceM: Math.round(row.distance_m),
+    vacancyRate: row.vacancy === null ? null : Number(row.vacancy),
+    rentPerM2: row.rent === null ? null : Number(row.rent),
+  }
+}

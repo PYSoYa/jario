@@ -162,10 +162,29 @@ type Churn = {
   to: number
 }
 
+type Market = {
+  name: string
+  distanceM: number
+  vacancyRate: number | null
+  rentPerM2: number | null
+}
+
 type SpotResponse = NearbyResponse & {
   industries: Industry[]
   markers: MarkerPoint[]
   churn: Churn
+  market: Market | null
+}
+
+/**
+ * 천원/㎡ → 10평(33㎡) 기준 월 임대료(만원).
+ *
+ * 천원/㎡ × 33㎡ = 천원 단위 총액이고, 만원으로 바꾸려면 10으로 나눈다.
+ * 즉 만원 = perM2 × 3.3. (35.4천원/㎡ → 117만원)
+ * 면적 10평은 우리가 고른 가정이라 화면에 그렇게 밝힌다.
+ */
+function rentFor10Pyeong(perM2: number) {
+  return Math.round(perM2 * 3.3)
 }
 
 /** 202512 → '2025년 12월' */
@@ -1477,6 +1496,48 @@ export default function MapPanel() {
                       <span className="measure">{formatQuarter(spot.churn.from)}</span> 대비{' '}
                       <span className="measure">{formatQuarter(spot.churn.to)}</span> 기준입니다.
                       사라진 곳에는 폐업뿐 아니라 이전·상호변경도 섞여 있습니다.
+                    </p>
+                  </div>
+                )}
+
+                {/*
+                  조사에 상권 경계가 없어(구획도가 이미지다) 소속을 판정할 수 없다.
+                  "이 자리의 공실률"이라 쓰지 않고 가장 가까운 상권과 거리를 함께 적는다.
+                  3km를 넘으면 서버가 null 을 주고 여기는 아예 그려지지 않는다.
+                */}
+                {spot?.market && (
+                  <div className="mt-4 border-t border-line pt-4">
+                    <div className="flex gap-6">
+                      {spot.market.vacancyRate !== null && (
+                        <div>
+                          <div className="flex items-baseline gap-1">
+                            <span className="measure text-xl font-semibold text-paper">
+                              {spot.market.vacancyRate}
+                            </span>
+                            <span className="text-xs text-muted">%</span>
+                          </div>
+                          <p className="text-xs text-muted">공실률</p>
+                        </div>
+                      )}
+                      {spot.market.rentPerM2 !== null && (
+                        <div>
+                          <div className="flex items-baseline gap-1">
+                            <span className="measure text-xl font-semibold text-paper">
+                              {rentFor10Pyeong(spot.market.rentPerM2)}
+                            </span>
+                            <span className="text-xs text-muted">만원</span>
+                          </div>
+                          <p className="text-xs text-muted">10평 월 임대료</p>
+                        </div>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs leading-snug text-muted">
+                      가장 가까운 조사 상권{' '}
+                      <span className="text-paper">{spot.market.name}</span> 기준입니다 (
+                      <span className="measure">{spot.market.distanceM.toLocaleString('ko-KR')}m</span>{' '}
+                      떨어져 있습니다). 한국부동산원 소규모상가 조사값이고, 임대료는 ㎡당{' '}
+                      <span className="measure">{spot.market.rentPerM2}</span>천원을 10평으로 환산한
+                      값입니다 — 실제 면적은 가게마다 다릅니다.
                     </p>
                   </div>
                 )}

@@ -3,6 +3,7 @@ import { nearbyQuerySchema } from '@/lib/nearby-query'
 import {
   countNearby,
   findMarkerPoints,
+  findMarketDistrict,
   findNearbyPlaces,
   measureChurn,
   summarizeNearby,
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
   const breakdownScope = industry ? industry.slice(0, 2) : undefined
 
   try {
-    const [industries, summary, items, markers, filtered, churn] = await Promise.all([
+    const [industries, summary, items, markers, filtered, churn, market] = await Promise.all([
       guard(topIndustries()),
       guard(summarizeNearby({ ...at, industry: breakdownScope, group: 'sub' })),
       guard(findNearbyPlaces({ ...at, industry, limit: 25, order: 'distance' })),
@@ -72,6 +73,7 @@ export async function GET(request: Request) {
       industry ? guard(countNearby({ ...at, industry })) : Promise.resolve(null),
       // 회전은 별도 테이블 두 개를 보므로 여기 얹어도 기존 쿼리를 건드리지 않는다.
       guard(measureChurn({ ...at, industry })),
+      guard(findMarketDistrict({ lon, lat })),
     ])
 
     const total = filtered ?? summary.total
@@ -87,6 +89,7 @@ export async function GET(request: Request) {
       markers,
       truncated: markers.length < total,
       churn,
+      market,
     })
   } catch (err) {
     console.error('[spot]', err)
