@@ -30,6 +30,21 @@ type Result = {
   applied: { sido: string | null; maxRent: number | null; maxCloseRate: number | null }
 }
 
+/**
+ * 이 동네의 상가 매물을 카카오맵에서 찾는 링크.
+ *
+ * 동네를 고른 사람의 다음 행동은 매물 찾기다. 지금은 거기서 끊긴다.
+ * 우리에게는 매물 데이터가 없고, 가져올 방법도 없다(있는 척하면 그게 이 도메인에서
+ * 가장 흔한 사기다). 그래서 가져오지 않고 넘긴다 — 리뷰를 크롤링하지 않고
+ * 카카오맵으로 넘긴 것과 같은 패턴이다.
+ *
+ * 시군구를 붙인다. '중앙동' 같은 이름은 전국에 여러 개라 동 이름만으로는 엉뚱한
+ * 동네가 열린다.
+ */
+function listingUrl(sigungu: string, dong: string) {
+  return `https://map.kakao.com/link/search/${encodeURIComponent(`${sigungu} ${dong} 상가임대`)}`
+}
+
 /** 천원/㎡ → 10평(33㎡) 월 임대료(만원). MapPanel과 같은 환산이다. */
 function rent10(perM2: number) {
   return Math.round(perM2 * 3.3)
@@ -181,11 +196,12 @@ export default function SpotFinder({
           </p>
           <ul className="mt-2 divide-y divide-line" style={{ opacity: q.isFetching ? 0.5 : 1 }}>
             {q.data.items.map((c) => (
-              <li key={c.dongCode}>
+              <li key={c.dongCode} className="flex items-stretch gap-2">
+                {/* 버튼 안에 링크를 넣으면 안 된다(중첩 인터랙티브). 나란히 둔다. */}
                 <button
                   type="button"
                   onClick={() => onPick({ lon: c.lon, lat: c.lat })}
-                  className="w-full py-2.5 text-left hover:text-commerce"
+                  className="min-w-0 flex-1 py-2.5 text-left hover:text-commerce"
                 >
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="truncate text-sm text-paper">
@@ -224,6 +240,18 @@ export default function SpotFinder({
                     )}
                   </div>
                 </button>
+                <a
+                  href={listingUrl(c.sigungu, c.dongName)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex shrink-0 items-center self-center rounded border border-line px-2 py-1
+                             text-xs text-muted transition-colors hover:border-commerce hover:text-commerce"
+                >
+                  매물<span aria-hidden="true"> ↗</span>
+                  <span className="sr-only">
+                    {c.sigungu} {c.dongName} 상가 매물을 카카오맵에서 찾기 (새 창)
+                  </span>
+                </a>
               </li>
             ))}
           </ul>
@@ -233,7 +261,8 @@ export default function SpotFinder({
             </p>
           )}
           <p className="mt-4 text-xs leading-snug text-muted">
-            임대료·공실률은 그 동네에서 가장 가까운 조사 상권 값입니다(3km 밖이면 표시하지
+            <span className="text-paper/70">매물 ↗</span>은 카카오맵 검색으로 넘어갑니다 — 이
+            서비스는 매물 데이터를 갖고 있지 않습니다. 임대료·공실률은 그 동네에서 가장 가까운 조사 상권 값입니다(3km 밖이면 표시하지
             않습니다). 소멸률은 이전 분기에 <span className="measure">{q.data.minPrev}</span>곳
             이상 있던 동네만 냅니다 — 표본이 작으면 비율이 튀어 뜻을 잃습니다.
           </p>
