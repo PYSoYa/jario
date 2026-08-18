@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { z } from 'zod'
-import { DATA_VERSION, measureSpot, type SpotMetrics } from './compare.ts'
+import { DATA_VERSION, industryBaseShare, measureSpot, type SpotMetrics } from './compare.ts'
 import { sql } from './db.ts'
 
 const spotInput = z.object({
@@ -83,9 +83,25 @@ export async function getReport(id: string): Promise<Report | null> {
   if (!row) return null
 
   // 지표는 저장하지 않고 볼 때 다시 계산한다. 같은 분기 데이터면 같은 값이 나온다.
+  //
+  // LQ 기준선은 업종에만 달린 값이라 한 번만 구해 두 자리에 함께 쓴다.
+  // 자리마다 구하면 691,087행 전체 집계를 두 번 하게 된다.
+  const baseShare = await industryBaseShare(row.industry_code)
   const [a, b] = await Promise.all([
-    measureSpot({ lon: row.a_lon, lat: row.a_lat, radius: row.radius, industry: row.industry_code }),
-    measureSpot({ lon: row.b_lon, lat: row.b_lat, radius: row.radius, industry: row.industry_code }),
+    measureSpot({
+      lon: row.a_lon,
+      lat: row.a_lat,
+      radius: row.radius,
+      industry: row.industry_code,
+      baseShare,
+    }),
+    measureSpot({
+      lon: row.b_lon,
+      lat: row.b_lat,
+      radius: row.radius,
+      industry: row.industry_code,
+      baseShare,
+    }),
   ])
 
   return {
