@@ -265,6 +265,8 @@ export default function MapPanel() {
   const [hits, setHits] = useState<Hit[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [searchNote, setSearchNote] = useState<string | null>(null)
+  /** 키보드로 훑고 있는 검색 결과. -1이면 입력창에 머물러 있다. */
+  const [activeHit, setActiveHit] = useState(-1)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -363,6 +365,7 @@ export default function MapPanel() {
 
     setSearching(true)
     setSearchNote(null)
+    setActiveHit(-1)
     new window.kakao.maps.services.Places().keywordSearch(
       q,
       (data, status) => {
@@ -394,6 +397,7 @@ export default function MapPanel() {
 
   const pickHit = (h: Hit) => {
     setHits(null)
+    setActiveHit(-1)
     setQuery(h.name)
     if (!withinCoverage(h.lon, h.lat)) {
       // 옮기긴 한다. 결과가 0곳으로 나오는 이유를 함께 알려준다.
@@ -683,6 +687,18 @@ export default function MapPanel() {
     industries.find((i) => i.code === industry) ??
     context?.breakdown.find((b) => b.code === industry)
 
+  /**
+   * 결과가 바뀐 것을 보조기술에 알리는 한 줄.
+   *
+   * 반경이나 업종을 바꾸면 화면의 숫자는 바뀌는데, 시각적으로 보지 않으면
+   * 아무 일도 일어나지 않은 것과 같다. 이 서비스의 답이 바로 그 숫자다.
+   * 조회 중에는 비워둔다 — 중간 상태를 읽어주면 소음이 된다.
+   */
+  const liveMessage =
+    loading || !focused
+      ? ''
+      : `반경 ${formatRadius(radius)} 안 ${selected?.name ?? '전체 업종'} ${focused.total.toLocaleString('ko-KR')}곳`
+
   return (
     <main className="relative h-full w-full">
       {appKey ? (
@@ -719,6 +735,10 @@ export default function MapPanel() {
                     md:inset-y-4 md:left-4 md:right-auto md:h-auto md:w-[23rem] md:rounded-lg md:border`}
         aria-label="상권 분석"
       >
+        {/* 시각적으로는 이미 숫자가 보이므로 화면에서는 감춘다. */}
+        <p className="sr-only" role="status" aria-live="polite">
+          {liveMessage}
+        </p>
         {/* 서랍 손잡이. 끌면 따라오고, 놓으면 가까운 단계로 붙는다. 탭하면 다음 단계.
             touch-none 이 없으면 브라우저 스크롤 제스처가 드래그를 가로챈다. */}
         <div
@@ -799,6 +819,8 @@ export default function MapPanel() {
               }}
               className="flex gap-1.5"
             >
+              {/* 결과 목록을 방향키로 훑을 수 있어야 한다. 마우스로만 고를 수 있으면
+                  키보드 사용자는 첫 결과조차 선택하지 못한다. combobox 패턴을 따른다. */}
               <input
                 type="search"
                 value={query}
@@ -806,8 +828,29 @@ export default function MapPanel() {
                   setQuery(e.target.value)
                   setSearchNote(null)
                 }}
+                onKeyDown={(e) => {
+                  if (!hits || hits.length === 0) return
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setActiveHit((i) => (i + 1) % hits.length)
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setActiveHit((i) => (i <= 0 ? hits.length - 1 : i - 1))
+                  } else if (e.key === 'Enter' && activeHit >= 0) {
+                    e.preventDefault()
+                    pickHit(hits[activeHit])
+                  } else if (e.key === 'Escape') {
+                    setHits(null)
+                    setActiveHit(-1)
+                  }
+                }}
                 placeholder="장소·주소 검색 (예: 강남역, 부평구청)"
                 aria-label="장소 검색"
+                role="combobox"
+                aria-expanded={!!hits && hits.length > 0}
+                aria-controls="search-results"
+                aria-autocomplete="list"
+                aria-activedescendant={activeHit >= 0 ? `search-hit-${activeHit}` : undefined}
                 className="min-w-0 flex-1 rounded border border-line bg-raised px-3 py-1.5 text-sm text-paper placeholder:text-muted/70"
               />
               <button
@@ -820,13 +863,22 @@ export default function MapPanel() {
             </form>
 
             {hits && hits.length > 0 && (
-              <ul className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-line bg-ink shadow-lg">
-                {hits.map((h) => (
-                  <li key={h.id}>
+              <ul
+                id="search-results"
+                role="listbox"
+                aria-label="검색 결과"
+                className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-line bg-ink shadow-lg"
+              >
+                {hits.map((h, i) => (
+                  <li key={h.id} id={`search-hit-${i}`} role="option" aria-selected={i === activeHit}>
                     <button
                       type="button"
+                      tabIndex={-1}
+                      onMouseEnter={() => setActiveHit(i)}
                       onClick={() => pickHit(h)}
-                      className="block w-full px-3 py-2 text-left transition-colors hover:bg-raised"
+                      className={`block w-full px-3 py-2 text-left transition-colors hover:bg-raised ${
+                        i === activeHit ? 'bg-raised' : ''
+                      }`}
                     >
                       <span className="block truncate text-sm text-paper">{h.name}</span>
                       <span className="block truncate text-xs text-muted">{h.address}</span>
