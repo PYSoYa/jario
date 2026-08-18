@@ -35,6 +35,22 @@ function guard<T>(p: Promise<T>): Promise<T> {
   return p
 }
 
+/**
+ * 어느 쿼리가 매달리는지 알기 위한 계측.
+ *
+ * 간헐적으로 이 경로만 20초(maxDuration)에 걸렸다. 같은 인스턴스가 다른 경로는
+ * 200으로 처리하므로 DB 연결 자체는 살아 있다. 로그에 이름과 시간을 남겨,
+ * 끝난 것과 끝나지 않은 것을 가른다.
+ */
+function timed<T>(name: string, p: Promise<T>): Promise<T> {
+  const t0 = Date.now()
+  p.then(
+    () => console.log(`[spot] ${name} ${Date.now() - t0}ms`),
+    (e) => console.log(`[spot] ${name} FAILED ${Date.now() - t0}ms ${String(e).slice(0, 120)}`),
+  )
+  return p
+}
+
 /** 업종 대분류. select 채우는 용도라 10개뿐이고 분기마다만 바뀐다. */
 function topIndustries() {
   return sql<{ code: string; name: string }[]>`
@@ -66,17 +82,17 @@ export async function GET(request: Request) {
   try {
     const [industries, summary, items, markers, filtered, churn, market, survival] =
       await Promise.all([
-      guard(topIndustries()),
-      guard(summarizeNearby({ ...at, industry: breakdownScope, group: 'sub' })),
-      guard(findNearbyPlaces({ ...at, industry, limit: 25, order: 'distance' })),
-      guard(findMarkerPoints({ ...at, industry, limit: 500 })),
+      timed('industries', guard(topIndustries())),
+      timed('summary', guard(summarizeNearby({ ...at, industry: breakdownScope, group: 'sub' }))),
+      timed('items', guard(findNearbyPlaces({ ...at, industry, limit: 25, order: 'distance' }))),
+      timed('markers', guard(findMarkerPoints({ ...at, industry, limit: 500 }))),
       // 헤드라인 숫자는 선택한 업종 기준이다. 분포를 한 번 더 돌리는 것보다
       // 단순 count 가 훨씬 싸다. 필터가 없으면 분포 총계가 곧 전체 수라 건너뛴다.
-      industry ? guard(countNearby({ ...at, industry })) : Promise.resolve(null),
+      industry ? timed('count', guard(countNearby({ ...at, industry }))) : Promise.resolve(null),
       // 회전은 별도 테이블 두 개를 보므로 여기 얹어도 기존 쿼리를 건드리지 않는다.
-      guard(measureChurn({ ...at, industry })),
-      guard(findMarketDistrict({ lon, lat })),
-      guard(survivalByIndustry({ ...at, limit: 5 })),
+      timed('churn', guard(measureChurn({ ...at, industry }))),
+      timed('market', guard(findMarketDistrict({ lon, lat }))),
+      timed('survival', guard(survivalByIndustry({ ...at, limit: 5 }))),
     ])
 
     const total = filtered ?? summary.total
