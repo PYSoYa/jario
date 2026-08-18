@@ -91,27 +91,21 @@ export async function searchSpots(p: {
       WHERE total >= ${MIN_DONG_TOTAL}
         ${p.sido ? sql`AND sigungu IN (SELECT DISTINCT sigungu_name FROM place WHERE sido_name LIKE ${p.sido + '%'})` : sql``}
     ),
-    cur AS (
-      SELECT adm_dong_code AS c, count(*) AS n FROM place
-      WHERE industry_code LIKE ${prefix} GROUP BY 1
-    ),
-    cls AS (
-      SELECT adm_dong_code AS c, count(*) AS n FROM place_closed
-      WHERE industry_code LIKE ${prefix} GROUP BY 1
-    ),
-    opn AS (
-      SELECT p.adm_dong_code AS c, count(*) AS n FROM place p
-      JOIN place_opened o ON o.place_id = p.place_id
-      WHERE p.industry_code LIKE ${prefix} GROUP BY 1
+    -- 사전 집계에서 읽는다. place 를 직접 훑으면 대분류(소매 142,840행)에서
+    -- 운영 11~16초가 나왔다. dong_stat 때와 같은 실수였다.
+    agg AS (
+      SELECT adm_dong_code AS c,
+             sum(cnt)::int AS n, sum(closed)::int AS closed_n, sum(opened)::int AS opened_n
+      FROM dong_industry_stat
+      WHERE industry_code LIKE ${prefix}
+      GROUP BY 1
     ),
     j AS (
       SELECT d.*,
-             COALESCE(cur.n, 0) AS cnt,
-             COALESCE(cur.n, 0) + COALESCE(cls.n, 0) - COALESCE(opn.n, 0) AS prev,
-             COALESCE(cls.n, 0) AS closed
-      FROM d LEFT JOIN cur ON cur.c = d.code
-             LEFT JOIN cls ON cls.c = d.code
-             LEFT JOIN opn ON opn.c = d.code
+             COALESCE(a.n, 0) AS cnt,
+             COALESCE(a.n, 0) + COALESCE(a.closed_n, 0) - COALESCE(a.opened_n, 0) AS prev,
+             COALESCE(a.closed_n, 0) AS closed
+      FROM d LEFT JOIN agg a ON a.c = d.code
     ),
     m AS (
       SELECT j.*, md.name AS m_name, md.rent_per_m2 AS m_rent, md.vacancy_rate AS m_vac,

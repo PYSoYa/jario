@@ -72,6 +72,22 @@ async function main() {
   console.log(
     `연결    : ${conn.total}개 (활성 ${conn.active} / 유휴 ${conn.idle}) · 상한 ${conn.limit_}`,
   )
+
+  // 통계가 낡으면 플래너가 엉뚱한 계획을 고른다. 같은 쿼리가 로컬 24ms인데
+  // 운영에서 11초 걸린 적이 있어, 마지막 분석 시각을 함께 본다.
+  const stats = await sql<
+    { name: string; live: string; analyzed: string | null }[]
+  >`
+    SELECT relname AS name, n_live_tup::text AS live,
+           COALESCE(to_char(GREATEST(last_analyze, last_autoanalyze), 'MM-DD HH24:MI'), '없음') AS analyzed
+    FROM pg_stat_user_tables
+    WHERE relname IN ('place','place_closed','place_opened','market_district','dong_stat','industry')
+    ORDER BY n_live_tup DESC
+  `
+  console.log('\n통계 갱신 :')
+  for (const t of stats) {
+    console.log(`  ${t.name.padEnd(16)} ${Number(t.live).toLocaleString('ko-KR').padStart(9)}행  분석 ${t.analyzed}`)
+  }
 }
 
 main()
