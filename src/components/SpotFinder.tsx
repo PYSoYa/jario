@@ -47,17 +47,27 @@ export default function SpotFinder({
   industryName: string
   onPick: (spot: { lon: number; lat: number }) => void
 }) {
-  const [sido, setSido] = useState<'' | '서울' | '인천'>('')
-  const [maxRent, setMaxRent] = useState('')
-  const [maxCloseRate, setMaxCloseRate] = useState('')
+  type Cond = { sido: '' | '서울' | '인천'; maxRent: string; maxCloseRate: string }
+  const EMPTY: Cond = { sido: '', maxRent: '', maxCloseRate: '' }
+
+  /**
+   * 입력값(draft)과 조회에 쓰는 값(applied)을 나눈다.
+   *
+   * 하나로 두면 글자를 칠 때마다 조회가 나간다 — "150"을 치면 1, 15, 150으로 세 번이다.
+   * 디바운스로 줄일 수도 있지만, 그러면 **언제 검색됐는지가 여전히 안 보인다**.
+   * 버튼을 누른 순간에만 바뀌게 하면 조회 수도 줄고 화면도 설명이 된다.
+   */
+  const [draft, setDraft] = useState<Cond>(EMPTY)
+  const [applied, setApplied] = useState<Cond>(EMPTY)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(applied)
 
   const q = useQuery({
-    queryKey: ['search', industry, sido, maxRent, maxCloseRate],
+    queryKey: ['search', industry, applied.sido, applied.maxRent, applied.maxCloseRate],
     queryFn: async ({ signal }) => {
       const params = new URLSearchParams({ industry, limit: '20' })
-      if (sido) params.set('sido', sido)
-      if (maxRent) params.set('maxRent', maxRent)
-      if (maxCloseRate) params.set('maxCloseRate', maxCloseRate)
+      if (applied.sido) params.set('sido', applied.sido)
+      if (applied.maxRent) params.set('maxRent', applied.maxRent)
+      if (applied.maxCloseRate) params.set('maxCloseRate', applied.maxCloseRate)
       const res = await fetch(`/api/search?${params}`, { signal })
       if (!res.ok) throw new Error(`조회에 실패했습니다 (${res.status})`)
       return res.json() as Promise<Result>
@@ -72,53 +82,91 @@ export default function SpotFinder({
   return (
     <div className="px-5 py-5">
       <p className="text-sm leading-relaxed text-muted">
-        <span className="text-paper">{industryName}</span> 기준으로 조건에 맞는 동네를 찾습니다.
+        <span className="text-paper">{industryName}</span> 창업에 맞는 동네를 찾습니다. 조건을
+        비워두면 전체에서 <span className="text-paper">소멸률이 낮은 순</span>으로 보여줍니다.
       </p>
 
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        <label className="text-xs text-muted">
-          지역
-          <select
-            value={sido}
-            onChange={(e) => setSido(e.target.value as '' | '서울' | '인천')}
-            className={`${field} mt-1`}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          setApplied(draft)
+        }}
+      >
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <label className="text-xs text-muted">
+            지역
+            <select
+              value={draft.sido}
+              onChange={(e) => setDraft({ ...draft, sido: e.target.value as Cond['sido'] })}
+              className={`${field} mt-1`}
+            >
+              <option value="">전체</option>
+              <option value="서울">서울</option>
+              <option value="인천">인천</option>
+            </select>
+          </label>
+          <label className="text-xs text-muted">
+            월 임대료 이하
+            <input
+              type="number"
+              inputMode="numeric"
+              value={draft.maxRent}
+              onChange={(e) => setDraft({ ...draft, maxRent: e.target.value })}
+              placeholder="만원"
+              className={`${field} measure mt-1`}
+            />
+          </label>
+          <label className="text-xs text-muted">
+            소멸률 이하
+            <input
+              type="number"
+              inputMode="numeric"
+              value={draft.maxCloseRate}
+              onChange={(e) => setDraft({ ...draft, maxCloseRate: e.target.value })}
+              placeholder="%"
+              className={`${field} measure mt-1`}
+            />
+          </label>
+        </div>
+
+        <div className="mt-2 flex gap-2">
+          <button
+            type="submit"
+            disabled={!dirty || q.isFetching}
+            className="flex-1 rounded border border-commerce px-3 py-2 text-sm text-commerce
+                       transition-colors hover:bg-commerce/10 disabled:border-line
+                       disabled:text-muted disabled:hover:bg-transparent"
           >
-            <option value="">전체</option>
-            <option value="서울">서울</option>
-            <option value="인천">인천</option>
-          </select>
-        </label>
-        <label className="text-xs text-muted">
-          임대료 이하
-          <input
-            type="number"
-            inputMode="numeric"
-            value={maxRent}
-            onChange={(e) => setMaxRent(e.target.value)}
-            placeholder="만원"
-            className={`${field} measure mt-1`}
-          />
-        </label>
-        <label className="text-xs text-muted">
-          소멸률 이하
-          <input
-            type="number"
-            inputMode="numeric"
-            value={maxCloseRate}
-            onChange={(e) => setMaxCloseRate(e.target.value)}
-            placeholder="%"
-            className={`${field} measure mt-1`}
-          />
-        </label>
-      </div>
+            {q.isFetching ? '찾는 중…' : dirty ? '이 조건으로 찾기' : '조건을 바꾸면 다시 찾습니다'}
+          </button>
+          {(applied.sido || applied.maxRent || applied.maxCloseRate) && (
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(EMPTY)
+                setApplied(EMPTY)
+              }}
+              className="rounded border border-line px-3 py-2 text-sm text-muted hover:text-paper"
+            >
+              초기화
+            </button>
+          )}
+        </div>
+      </form>
 
       {q.error && <p className="mt-4 text-sm text-paper">{q.error.message}</p>}
 
       {q.data && (
         <>
-          <p className="mt-4 text-xs text-muted">
-            조건에 맞는 동네 <span className="measure text-paper">{q.data.scanned}</span>곳 · 소멸률
-            낮은 순
+          <p className="mt-4 text-xs leading-snug text-muted">
+            {[
+              applied.sido || '서울·인천 전체',
+              applied.maxRent && `월 ${applied.maxRent}만원 이하`,
+              applied.maxCloseRate && `소멸률 ${applied.maxCloseRate}% 이하`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}{' '}
+            → 동네 <span className="measure text-paper">{q.data.scanned}</span>곳 · 소멸률 낮은 순
           </p>
           <ul className="mt-2 divide-y divide-line" style={{ opacity: q.isFetching ? 0.5 : 1 }}>
             {q.data.items.map((c) => (
