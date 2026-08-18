@@ -16,7 +16,8 @@
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.ts",
     "db:remote:check": "node --env-file-if-exists=.env.local scripts/check-remote.ts",
     "data:inspect": "node scripts/inspect-csv.ts",
-    "data:transform": "docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -f - < db/etl/transform.sql"
+    "data:transform": "docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -f - < db/etl/transform.sql",
+    "data:churn": "docker exec -i jario-db psql -U jario -d jario -v ON_ERROR_STOP=1 -v prev_quarter=202512 -v curr_quarter=202606 -f - < db/etl/churn.sql"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.4",

@@ -342,3 +342,74 @@ export async function summarizeNearby(
     breakdown: rows.map((r) => ({ code: r.code, name: r.name, count: Number(r.count) })),
   }
 }
+
+export type Churn = {
+  /** 최신 분기에 살아 있는 업소 수 */
+  active: number
+  /** 이전 분기에 있었고 최신 분기에 없는 업소 수 */
+  closed: number
+  /** 최신 분기에 새로 나타난 업소 수 */
+  opened: number
+  /** 대조에 쓴 분기 (YYYYMM) */
+  from: number
+  to: number
+}
+
+/**
+ * 이 자리 반경의 업소 회전.
+ *
+ * 원본에는 개업일도 폐업일도 없다. 분기 스냅샷 두 장을 대조해서만 구할 수 있고,
+ * 그 대조 결과가 place_closed / place_opened 다(db/etl/churn.sql).
+ *
+ * closed 를 "폐업"이라 부르지 않는 이유: 보정 후에도 이전(移轉)·상호변경·
+ * 데이터 정비가 섞여 있고 스냅샷 대조로는 가릴 수 없다. 화면에도 "사라진 곳"으로 적는다.
+ *
+ * 세 수를 한 번에 세지 않고 쿼리 세 개로 나눈다. 각각 다른 테이블의 GiST 인덱스를
+ * 그대로 타는 편이, 억지로 합쳐 조인 계획을 흔드는 것보다 빠르다.
+ */
+export async function measureChurn(p: {
+  lon: number
+  lat: number
+  radius: number
+  industry?: string
+}): Promise<Churn> {
+  const [active, closed, opened] = await Promise.all([
+    sql<{ n: string }[]>`
+      SELECT count(*)::text AS n
+      FROM place p
+      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+        ${industryFilter(p.industry)}
+    `,
+    sql<{ n: string }[]>`
+      SELECT count(*)::text AS n
+      FROM place_closed p
+      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+        ${industryFilter(p.industry)}
+    `,
+    // place_opened 는 좌표를 들고 있지 않다. 반경 판정은 place 의 GiST가 하고,
+    // 신규 여부만 PK 조인으로 확인한다.
+    sql<{ n: string }[]>`
+      SELECT count(*)::text AS n
+      FROM place p
+      JOIN place_opened o ON o.place_id = p.place_id
+      WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+        ${industryFilter(p.industry)}
+    `,
+  ])
+
+  return {
+    active: Number(active[0].n),
+    closed: Number(closed[0].n),
+    opened: Number(opened[0].n),
+    from: CHURN_FROM,
+    to: CHURN_TO,
+  }
+}
+
+/**
+ * 대조한 두 분기. 데이터를 새로 넣을 때 함께 고쳐야 한다.
+ * DB에서 읽어오지 않는 이유: 회전 테이블이 비어 있으면 분기를 알 수 없는데,
+ * 그때도 화면은 "언제부터 언제까지"를 말해야 한다.
+ */
+export const CHURN_FROM = 202512
+export const CHURN_TO = 202606

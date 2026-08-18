@@ -154,9 +154,23 @@ function formatRadius(m: number) {
 /** 마커는 좌표와 이름만 온다. 목록용 전체 행을 500건 실으면 응답이 145KB가 된다. */
 type MarkerPoint = { placeId: string; name: string; lon: number; lat: number }
 
+type Churn = {
+  active: number
+  closed: number
+  opened: number
+  from: number
+  to: number
+}
+
 type SpotResponse = NearbyResponse & {
   industries: Industry[]
   markers: MarkerPoint[]
+  churn: Churn
+}
+
+/** 202512 → '2025년 12월' */
+function formatQuarter(q: number) {
+  return `${Math.floor(q / 100)}년 ${q % 100}월`
 }
 
 /** 한 자리를 분석하는 데 필요한 것을 한 번에 받는다. */
@@ -1407,6 +1421,42 @@ export default function MapPanel() {
                     이 자리 주변에는 등록된 업소가 없습니다. {COVERAGE_LABEL} 밖이라면 아직
                     데이터가 없는 지역입니다.
                   </p>
+                )}
+
+                {/*
+                  밀도만으로는 이 자리가 좋은지 나쁜지 알 수 없다. 같은 반경에서
+                  얼마나 사라지고 생겼는지가 훨씬 직접적인 신호다.
+                  "폐업"이라 쓰지 않는다 — 이전·상호변경·데이터 정비가 섞여 있고
+                  스냅샷 대조로는 가릴 수 없다.
+                */}
+                {spot?.churn && spot.churn.active + spot.churn.closed > 0 && (
+                  <div className="mt-4 border-t border-line pt-4">
+                    <div className="flex gap-6">
+                      <div>
+                        <div className="flex items-baseline gap-1">
+                          <span className="measure text-xl font-semibold text-commerce">
+                            {spot.churn.closed.toLocaleString('ko-KR')}
+                          </span>
+                          <span className="text-xs text-muted">곳</span>
+                        </div>
+                        <p className="text-xs text-muted">사라짐</p>
+                      </div>
+                      <div>
+                        <div className="flex items-baseline gap-1">
+                          <span className="measure text-xl font-semibold text-paper">
+                            {spot.churn.opened.toLocaleString('ko-KR')}
+                          </span>
+                          <span className="text-xs text-muted">곳</span>
+                        </div>
+                        <p className="text-xs text-muted">새로 생김</p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-xs leading-snug text-muted">
+                      <span className="measure">{formatQuarter(spot.churn.from)}</span> 대비{' '}
+                      <span className="measure">{formatQuarter(spot.churn.to)}</span> 기준입니다.
+                      사라진 곳에는 폐업뿐 아니라 이전·상호변경도 섞여 있습니다.
+                    </p>
+                  </div>
                 )}
               </div>
 

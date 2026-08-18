@@ -1,6 +1,12 @@
 import { sql } from '@/lib/db'
 import { nearbyQuerySchema } from '@/lib/nearby-query'
-import { countNearby, findMarkerPoints, findNearbyPlaces, summarizeNearby } from '@/lib/places'
+import {
+  countNearby,
+  findMarkerPoints,
+  findNearbyPlaces,
+  measureChurn,
+  summarizeNearby,
+} from '@/lib/places'
 
 /**
  * GET /api/spot?lon=&lat=&radius=&industry=
@@ -56,7 +62,7 @@ export async function GET(request: Request) {
   const breakdownScope = industry ? industry.slice(0, 2) : undefined
 
   try {
-    const [industries, summary, items, markers, filtered] = await Promise.all([
+    const [industries, summary, items, markers, filtered, churn] = await Promise.all([
       guard(topIndustries()),
       guard(summarizeNearby({ ...at, industry: breakdownScope, group: 'sub' })),
       guard(findNearbyPlaces({ ...at, industry, limit: 25, order: 'distance' })),
@@ -64,6 +70,8 @@ export async function GET(request: Request) {
       // 헤드라인 숫자는 선택한 업종 기준이다. 분포를 한 번 더 돌리는 것보다
       // 단순 count 가 훨씬 싸다. 필터가 없으면 분포 총계가 곧 전체 수라 건너뛴다.
       industry ? guard(countNearby({ ...at, industry })) : Promise.resolve(null),
+      // 회전은 별도 테이블 두 개를 보므로 여기 얹어도 기존 쿼리를 건드리지 않는다.
+      guard(measureChurn({ ...at, industry })),
     ])
 
     const total = filtered ?? summary.total
@@ -78,6 +86,7 @@ export async function GET(request: Request) {
       items,
       markers,
       truncated: markers.length < total,
+      churn,
     })
   } catch (err) {
     console.error('[spot]', err)
