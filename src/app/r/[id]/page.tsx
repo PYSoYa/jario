@@ -80,6 +80,34 @@ function spotCol(s: Report['a'], industryName: string | null) {
     ) : (
       <span className="text-muted">—</span>
     ),
+    churn: s.churn ? (
+      <>
+        <span className="measure text-commerce">{fmt(s.churn.closed)}</span>
+        <span className="text-muted"> 사라짐 · </span>
+        <span className="measure">{fmt(s.churn.opened)}</span>
+        <span className="text-muted"> 새로 생김</span>
+      </>
+    ) : (
+      <span className="text-muted">—</span>
+    ),
+    vacancy:
+      s.market?.vacancyRate == null ? (
+        <span className="text-muted">—</span>
+      ) : (
+        <>
+          <span className="measure">{s.market.vacancyRate}</span>
+          <span className="text-muted">% · {s.market.name}</span>
+        </>
+      ),
+    rent:
+      s.market?.rentPerM2 == null ? (
+        <span className="text-muted">—</span>
+      ) : (
+        <>
+          <span className="measure">{Math.round(s.market.rentPerM2 * 3.3)}</span>
+          <span className="text-muted">만원 · {s.market.name}</span>
+        </>
+      ),
     top: (
       <ul className="space-y-0.5">
         {s.topIndustries.map((t) => (
@@ -168,6 +196,26 @@ export default async function ReportPage({ params }: PageProps<'/r/[id]'>) {
             b={B.dong}
             hint={what ? `LQ는 상권 규모 대비 ${what} 편중도` : undefined}
           />
+          <Row
+            label="최근 6개월 회전"
+            a={A.churn}
+            b={B.churn}
+            hint="사라진 곳에는 폐업뿐 아니라 이전·상호변경도 섞여 있다"
+          />
+          <Row
+            label="공실률"
+            a={A.vacancy}
+            b={B.vacancy}
+            lowerIsBetter
+            hint="가장 가까운 조사 상권 기준 (3km 밖이면 표시하지 않는다)"
+          />
+          <Row
+            label="10평 월 임대료"
+            a={A.rent}
+            b={B.rent}
+            lowerIsBetter
+            hint="㎡당 조사값을 33㎡로 환산한 값 — 실제 면적은 가게마다 다르다"
+          />
           <Row label="주변에 많은 업종" a={A.top} b={B.top} />
           <Row label="좌표" a={A.coords} b={B.coords} />
         </tbody>
@@ -175,13 +223,18 @@ export default async function ReportPage({ params }: PageProps<'/r/[id]'>) {
 
       <section className="mt-10 border-t border-line pt-6 text-xs leading-relaxed text-muted">
         <p>
-          <span className="text-paper/80">이 표로 할 수 없는 말이 있습니다.</span> 업소 구성만
-          보며 인구·유동인구·임대료·소득은 들어 있지 않습니다. 경쟁이 적은 것이 곧 기회는
-          아닙니다 — 수요가 없어서일 수 있습니다.
+          <span className="text-paper/80">이 표로 할 수 없는 말이 있습니다.</span> 인구·유동인구·소득은
+          들어 있지 않습니다. 경쟁이 적은 것이 곧 기회는 아닙니다 — 수요가 없어서일 수 있습니다.
         </p>
         <p className="mt-2">
           행정동은 경계 데이터가 없어 가장 가까운 업소의 동으로 판단했습니다. 경계 근처에서는
           틀릴 수 있습니다.
+        </p>
+        <p className="mt-2">
+          공실률·임대료는 한국부동산원 상업용부동산 임대동향조사(소규모상가)이고, 이 자리가 아니라{' '}
+          <span className="text-paper/80">가장 가까운 조사 상권</span>의 값입니다 — 조사에 상권
+          경계가 없어 소속을 판정할 수 없습니다. 회전은 분기 스냅샷 두 장을 대조한 값이라
+          &ldquo;폐업&rdquo;으로 단정하지 않습니다.
         </p>
         <p className="mt-2">
           소상공인시장진흥공단 <span className="measure">{report.dataVersion}</span> 스냅샷 ·

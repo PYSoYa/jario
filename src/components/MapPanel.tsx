@@ -346,30 +346,44 @@ export default function MapPanel() {
    * 안 보인다. 보이는 영역의 한가운데로 오도록 시트 높이의 절반만큼 보정한다.
    * (조회에 쓰는 좌표는 그대로다. 화면만 옮긴다.)
    */
+  /**
+   * 우리가 지도를 옮긴 직후인가.
+   *
+   * idle 은 누가 옮겼는지 알려주지 않는다. 내 위치·검색·상세 보정처럼 코드가 옮긴 것까지
+   * "사용자가 지도를 옮겼다"로 세면 "이 지역에서 다시 찾기"가 뜬다 — 이미 그 자리를
+   * 분석 중인데 다시 찾으라고 하는 셈이다. 실제로 첫 방문에서 내 위치로 이동하면
+   * 곧바로 그 버튼이 떴다(keepVisible 이 서랍 높이의 절반만큼 밀기 때문이다).
+   */
+  const programmaticUntil = useRef(0)
+  const markProgrammatic = useCallback(() => {
+    // panTo 애니메이션이 끝날 때까지. idle 은 도중에 여러 번 온다.
+    programmaticUntil.current = Date.now() + 900
+  }, [])
+
   const keepVisible = useCallback(() => {
     const m = map.current
     const sheet = sheetRef.current
     if (!m || !sheet) return
     // md 이상에서는 패널이 왼쪽에 있어 지도 중심을 가리지 않는다.
     if (window.matchMedia('(min-width: 768px)').matches) return
+    markProgrammatic()
     m.panBy(0, sheet.getBoundingClientRect().height / 2)
-  }, [])
+  }, [markProgrammatic])
 
-  /** 서랍 높이가 바뀌면 가려지는 영역도 달라진다. 중심을 다시 잡고 새 높이로 보정한다. */
-  const resettle = useCallback(() => {
-    window.setTimeout(() => {
-      map.current?.relayout()
-      map.current?.setCenter(new window.kakao.maps.LatLng(center.lat, center.lon))
-      keepVisible()
-    }, 230)
-  }, [center, keepVisible])
-
+  /**
+   * 서랍 높이만 바꾼다. 지도는 건드리지 않는다.
+   *
+   * 예전에는 여기서 relayout + setCenter + keepVisible 을 했다. 서랍을 조금 끌 때마다
+   * 지도가 튀어서, 지도를 보며 서랍 높이를 조절하는 것이 불가능했다.
+   *
+   * 셋 다 필요 없었다 — 서랍은 absolute 로 지도 **위에** 얹히고 지도 캔버스는 늘
+   * 화면 전체다. 컨테이너 크기가 변하지 않으니 relayout 할 것도, 중심을 다시 잡을 것도 없다.
+   */
   const gotoSnap = useCallback(
     (i: number) => {
       setSnap(i)
-      resettle()
     },
-    [resettle],
+    [],
   )
 
   const onGrabStart = (e: React.PointerEvent) => {
@@ -423,13 +437,14 @@ export default function MapPanel() {
       if (snap < 1) gotoSnap(1)
       window.setTimeout(
         () => {
+          markProgrammatic()
           map.current?.panTo(new window.kakao.maps.LatLng(at.lat, at.lon))
           keepVisible()
         },
         snap < 1 ? 260 : 0,
       )
     },
-    [isNarrow, snap, gotoSnap, keepVisible],
+    [isNarrow, snap, gotoSnap, keepVisible, markProgrammatic],
   )
 
   const selectPlace = useCallback(
@@ -443,12 +458,13 @@ export default function MapPanel() {
       // 고른 업소가 서랍에 가리지 않게 지도도 옮긴다.
       if (at) {
         window.setTimeout(() => {
+          markProgrammatic()
           map.current?.panTo(new window.kakao.maps.LatLng(at.lat, at.lon))
           keepVisible()
         }, snap < 1 ? 260 : 0)
       }
     },
-    [isNarrow, snap, gotoSnap, keepVisible],
+    [isNarrow, snap, gotoSnap, keepVisible, markProgrammatic],
   )
 
   /**
@@ -567,6 +583,7 @@ export default function MapPanel() {
 
         setNotice(null)
         setCenter({ lon, lat })
+        markProgrammatic()
         map.current?.panTo(new window.kakao.maps.LatLng(lat, lon))
       },
       () => {
@@ -575,7 +592,7 @@ export default function MapPanel() {
       },
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 },
     )
-  }, [])
+  }, [markProgrammatic])
 
   // 세 개의 조회는 목적이 서로 다르다.
   //
@@ -743,6 +760,11 @@ export default function MapPanel() {
     kakao.maps.event.addListener(map.current, 'idle', () => {
       const c = map.current?.getCenter()
       if (!c) return
+      if (Date.now() < programmaticUntil.current) {
+        // 코드가 옮긴 것이다. 분석 자리와 어긋난 게 아니므로 "다시 찾기"를 띄우지 않는다.
+        setMovedTo(null)
+        return
+      }
       setMovedTo({ lon: c.getLng(), lat: c.getLat() })
     })
 

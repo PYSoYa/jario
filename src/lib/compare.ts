@@ -16,6 +16,13 @@ export type SpotMetrics = {
   dong: { code: string; name: string; sigungu: string; total: number; lq: number | null } | null
   /** 가장 가까운 동종 업소까지 거리(m). 업종 미선택이거나 없으면 null */
   nearestSameM: number | null
+  /** 반경 안 회전 — 이전 분기 대비 사라진 곳 / 새로 생긴 곳 */
+  churn: { closed: number; opened: number } | null
+  /**
+   * 가장 가까운 조사 상권의 공실률·임대료. 3km를 넘으면 null.
+   * "이 자리의 값"이 아니다 — 상권 경계가 없어 소속을 판정할 수 없다.
+   */
+  market: { name: string; distanceM: number; vacancyRate: number | null; rentPerM2: number | null } | null
 }
 
 /**
@@ -57,7 +64,7 @@ export async function measureSpot(p: {
     return q
   }
 
-  const [counts, top, dongRow, nearest] = await Promise.all([
+  const [counts, top, dongRow, nearest, churnRow, marketRow] = await Promise.all([
     guard(sql<{ total: string; target: string | null }[]>`
       SELECT
         count(*)::text AS total,
@@ -108,6 +115,30 @@ export async function measureSpot(p: {
           LIMIT 1
         `)
       : Promise.resolve([] as { d: number }[]),
+
+    // 회전. place_closed / place_opened 는 별도 테이블이라 기존 쿼리에 영향이 없다.
+    guard(sql<{ closed: string; opened: string }[]>`
+      SELECT
+        (SELECT count(*) FROM place_closed c
+          WHERE ST_DWithin(c.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+            ${prefix ? sql`AND c.industry_code LIKE ${prefix}` : sql``})::text AS closed,
+        (SELECT count(*) FROM place p2
+          JOIN place_opened o ON o.place_id = p2.place_id
+          WHERE ST_DWithin(p2.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+            ${prefix ? sql`AND p2.industry_code LIKE ${prefix}` : sql``})::text AS opened
+    `),
+
+    // 공실률·임대료. 상권 68곳뿐이지만 KNN 형태로 두면 늘어도 그대로 쓴다.
+    guard(sql<
+      { name: string; distance_m: number; vacancy: string | null; rent: string | null }[]
+    >`
+      SELECT d.name,
+             ST_Distance(d.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography) AS distance_m,
+             d.vacancy_rate::text AS vacancy, d.rent_per_m2::text AS rent
+      FROM market_district d
+      ORDER BY d.geom <-> ST_MakePoint(${p.lon}, ${p.lat})::geography
+      LIMIT 1
+    `),
   ])
 
   const c = counts[0]
@@ -132,5 +163,17 @@ export async function measureSpot(p: {
         }
       : null,
     nearestSameM: nearest[0] ? Math.round(nearest[0].d) : null,
+    churn: churnRow[0]
+      ? { closed: Number(churnRow[0].closed), opened: Number(churnRow[0].opened) }
+      : null,
+    market:
+      marketRow[0] && marketRow[0].distance_m <= 3000
+        ? {
+            name: marketRow[0].name,
+            distanceM: Math.round(marketRow[0].distance_m),
+            vacancyRate: marketRow[0].vacancy === null ? null : Number(marketRow[0].vacancy),
+            rentPerM2: marketRow[0].rent === null ? null : Number(marketRow[0].rent),
+          }
+        : null,
   }
 }
