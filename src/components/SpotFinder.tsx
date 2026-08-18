@@ -22,7 +22,13 @@ type Candidate = {
   market: Market | null
 }
 
-type Result = { items: Candidate[]; scanned: number; minPrev: number }
+type Result = {
+  items: Candidate[]
+  scanned: number
+  minPrev: number
+  /** 이 결과를 만든 조건. 화면은 draft/applied가 아니라 이걸 표시한다 — 아래 주석 참고. */
+  applied: { sido: string | null; maxRent: number | null; maxCloseRate: number | null }
+}
 
 /** 천원/㎡ → 10평(33㎡) 월 임대료(만원). MapPanel과 같은 환산이다. */
 function rent10(perM2: number) {
@@ -159,10 +165,15 @@ export default function SpotFinder({
       {q.data && (
         <>
           <p className="mt-4 text-xs leading-snug text-muted">
+            {/*
+              applied(내가 보낸 값)가 아니라 q.data.applied(결과가 만들어진 값)를 쓴다.
+              이전 결과를 유지하는 동안 라벨만 먼저 바뀌면 "월 150만원 이하 → 532곳"처럼
+              조건과 숫자가 어긋난다. 532는 조건 없는 수다.
+            */}
             {[
-              applied.sido || '서울·인천 전체',
-              applied.maxRent && `월 ${applied.maxRent}만원 이하`,
-              applied.maxCloseRate && `소멸률 ${applied.maxCloseRate}% 이하`,
+              q.data.applied.sido || '서울·인천 전체',
+              q.data.applied.maxRent && `월 ${q.data.applied.maxRent}만원 이하`,
+              q.data.applied.maxCloseRate && `소멸률 ${q.data.applied.maxCloseRate}% 이하`,
             ]
               .filter(Boolean)
               .join(' · ')}{' '}

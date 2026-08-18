@@ -21,6 +21,14 @@ export type SpotSearch = {
   /** 조건을 걸기 전 후보 동 수 */
   scanned: number
   minPrev: number
+  /**
+   * 이 결과를 만든 조건. 화면이 자기가 보낸 값이 아니라 **이 값을** 표시해야 한다.
+   *
+   * 이전 결과를 유지한 채 새로 조회하면(keepPreviousData) 라벨만 먼저 바뀌어
+   * "월 150만원 이하 → 532곳"처럼 조건과 숫자가 어긋난다. 532는 조건 없는 수다.
+   * 숫자와 설명이 어긋나면 둘 중 하나가 거짓말이다.
+   */
+  applied: { sido: string | null; maxRent: number | null; maxCloseRate: number | null }
 }
 
 /**
@@ -139,6 +147,11 @@ export async function searchSpots(p: {
   `
 
   return {
+    applied: {
+      sido: p.sido ?? null,
+      maxRent: p.maxRent ?? null,
+      maxCloseRate: p.maxCloseRate ?? null,
+    },
     items: rows.map((r) => ({
       dongCode: r.code,
       dongName: r.name,

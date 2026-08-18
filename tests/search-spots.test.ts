@@ -65,6 +65,15 @@ describe('searchSpots', () => {
     }
   })
 
+  it('결과가 자기를 만든 조건을 함께 돌려준다', async () => {
+    // 화면이 보낸 값을 그대로 그리면, 이전 결과를 유지하는 동안 라벨만 먼저 바뀌어
+    // "150만원 이하 → 532곳"처럼 조건과 숫자가 어긋난다. 532는 조건 없는 수다.
+    const r = await searchSpots({ industry: 'I212', maxRent: 150, sido: '서울', limit: 5 })
+    assert.deepEqual(r.applied, { sido: '서울', maxRent: 150, maxCloseRate: null })
+    const none = await searchSpots({ industry: 'I212', limit: 5 })
+    assert.deepEqual(none.applied, { sido: null, maxRent: null, maxCloseRate: null })
+  })
+
   it('상권은 3km 안일 때만 붙인다', async () => {
     const r = await searchSpots({ industry: 'I212', limit: 50 })
     for (const c of r.items) {
