@@ -258,6 +258,13 @@ export default function MapPanel() {
   const [saving, setSaving] = useState(false)
   const [reportUrl, setReportUrl] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+
+  // 장소 검색. 내 위치만으로는 다른 동네를 볼 수 없다.
+  type Hit = { id: string; name: string; address: string; lon: number; lat: number }
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<Hit[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [searchNote, setSearchNote] = useState<string | null>(null)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -333,6 +340,70 @@ export default function MapPanel() {
       if (Math.abs(heightFor(i) - h) < Math.abs(heightFor(best) - h)) best = i
     }
     gotoSnap(best)
+  }
+
+  /** 검색 결과나 내 위치로 자리를 옮긴다. */
+  const goTo = useCallback(
+    (lon: number, lat: number) => {
+      setNotice(null)
+      setSelectedId(null)
+      setCenter({ lon, lat })
+      map.current?.panTo(new window.kakao.maps.LatLng(lat, lon))
+    },
+    [],
+  )
+
+  const search = useCallback(() => {
+    const q = query.trim()
+    if (!q) return
+    if (!window.kakao?.maps?.services) {
+      setSearchNote('검색 기능을 불러오지 못했습니다.')
+      return
+    }
+
+    setSearching(true)
+    setSearchNote(null)
+    new window.kakao.maps.services.Places().keywordSearch(
+      q,
+      (data, status) => {
+        setSearching(false)
+        const S = window.kakao.maps.services.Status
+        if (status === S.ZERO_RESULT) {
+          setHits([])
+          setSearchNote('검색 결과가 없습니다.')
+          return
+        }
+        if (status !== S.OK) {
+          setHits(null)
+          setSearchNote('검색에 실패했습니다.')
+          return
+        }
+        setHits(
+          data.map((d) => ({
+            id: d.id,
+            name: d.place_name,
+            address: d.road_address_name || d.address_name,
+            lon: Number(d.x),
+            lat: Number(d.y),
+          })),
+        )
+      },
+      { size: 8 },
+    )
+  }, [query])
+
+  const pickHit = (h: Hit) => {
+    setHits(null)
+    setQuery(h.name)
+    if (!withinCoverage(h.lon, h.lat)) {
+      // 옮기긴 한다. 결과가 0곳으로 나오는 이유를 함께 알려준다.
+      setNotice(`${h.name}은(는) ${COVERAGE_LABEL} 밖이라 표시할 업소 데이터가 없습니다.`)
+      setSelectedId(null)
+      setCenter({ lon: h.lon, lat: h.lat })
+      map.current?.panTo(new window.kakao.maps.LatLng(h.lat, h.lon))
+      return
+    }
+    goTo(h.lon, h.lat)
   }
 
   /**
@@ -616,7 +687,8 @@ export default function MapPanel() {
     <main className="relative h-full w-full">
       {appKey ? (
         <Script
-          src={`https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false&libraries=clusterer`}
+          // services: 장소·주소 검색. 지도용 JS 키를 그대로 쓴다.
+          src={`https://dapi.kakao.com/v2/maps/sdk.js?appkey=${appKey}&autoload=false&libraries=clusterer,services`}
           strategy="afterInteractive"
           onLoad={() => window.kakao.maps.load(initMap)}
           onError={() => setFailed(true)}
@@ -718,6 +790,55 @@ export default function MapPanel() {
             <span aria-hidden="true">◎</span>
             {locating ? '위치 찾는 중' : '내 위치로'}
           </button>
+          {/* 장소 검색. 내 위치만으로는 다른 동네를 볼 수 없다. */}
+          <div className="relative mt-3">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                search()
+              }}
+              className="flex gap-1.5"
+            >
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setSearchNote(null)
+                }}
+                placeholder="장소·주소 검색 (예: 강남역, 부평구청)"
+                aria-label="장소 검색"
+                className="min-w-0 flex-1 rounded border border-line bg-raised px-3 py-1.5 text-sm text-paper placeholder:text-muted/70"
+              />
+              <button
+                type="submit"
+                disabled={searching || !query.trim()}
+                className="shrink-0 rounded border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:border-muted hover:text-paper disabled:opacity-50"
+              >
+                {searching ? '…' : '검색'}
+              </button>
+            </form>
+
+            {hits && hits.length > 0 && (
+              <ul className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded border border-line bg-ink shadow-lg">
+                {hits.map((h) => (
+                  <li key={h.id}>
+                    <button
+                      type="button"
+                      onClick={() => pickHit(h)}
+                      className="block w-full px-3 py-2 text-left transition-colors hover:bg-raised"
+                    >
+                      <span className="block truncate text-sm text-paper">{h.name}</span>
+                      <span className="block truncate text-xs text-muted">{h.address}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {searchNote && <p className="mt-2 text-xs text-muted">{searchNote}</p>}
+
           {notice && (
             <p className="mt-2 rounded border border-line bg-raised px-2.5 py-2 text-xs leading-snug text-paper/80">
               {notice}

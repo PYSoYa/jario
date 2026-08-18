@@ -94,6 +94,34 @@ declare namespace kakao.maps {
     function addListener(target: Marker, type: 'click', handler: () => void): void
   }
 
+  /**
+   * 장소·주소 검색. SDK를 libraries=services 로 불러와야 존재한다.
+   * 지도용 JavaScript 키를 그대로 쓴다.
+   */
+  namespace services {
+    const Status: { OK: string; ZERO_RESULT: string; ERROR: string }
+
+    type PlaceResult = {
+      id: string
+      place_name: string
+      address_name: string
+      road_address_name: string
+      category_name: string
+      /** 경도(문자열로 온다) */
+      x: string
+      /** 위도(문자열로 온다) */
+      y: string
+    }
+
+    class Places {
+      keywordSearch(
+        keyword: string,
+        callback: (data: PlaceResult[], status: string) => void,
+        options?: { size?: number; page?: number },
+      ): void
+    }
+  }
+
   /** autoload=false로 로드했을 때 SDK 초기화를 끝내는 콜백 */
   function load(callback: () => void): void
 }
