@@ -141,9 +141,12 @@ function formatRadius(m: number) {
   return m >= 1000 ? `${m / 1000}km` : `${m}m`
 }
 
+/** 마커는 좌표와 이름만 온다. 목록용 전체 행을 500건 실으면 응답이 145KB가 된다. */
+type MarkerPoint = { placeId: string; name: string; lon: number; lat: number }
+
 type SpotResponse = NearbyResponse & {
   industries: Industry[]
-  markers: NearbyResponse['items']
+  markers: MarkerPoint[]
 }
 
 /** 한 자리를 분석하는 데 필요한 것을 한 번에 받는다. */

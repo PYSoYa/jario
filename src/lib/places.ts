@@ -39,6 +39,40 @@ export type IndustryCount = {
   count: number
 }
 
+export type MarkerPoint = { placeId: string; name: string; lon: number; lat: number }
+
+/**
+ * 지도 마커용 최소 정보.
+ *
+ * 마커에는 좌표와 이름(툴팁)만 필요하다. 목록용 전체 행을 500건 실어 보내면
+ * 응답이 145KB까지 커지는데, 그중 대부분이 화면에 안 쓰이는 주소·업종·거리다.
+ */
+export async function findMarkerPoints(
+  p: Omit<NearbyParams, 'order'>,
+): Promise<MarkerPoint[]> {
+  const rows = await sql<{ place_id: string; name: string; lon: number; lat: number }[]>`
+    SELECT p.place_id, p.name, p.lon, p.lat
+    FROM place p
+    WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+      ${industryFilter(p.industry)}
+    -- 공간적으로 치우치지 않는 표본. 이유는 NearbyParams.order 주석 참고.
+    ORDER BY hashtext(p.place_id)
+    LIMIT ${p.limit}
+  `
+  return rows.map((r) => ({ placeId: r.place_id, name: r.name, lon: r.lon, lat: r.lat }))
+}
+
+/** 반경 안 업소 수만 센다. 분포까지 필요 없을 때 쓴다(집계보다 훨씬 싸다). */
+export async function countNearby(p: Omit<NearbyParams, 'limit' | 'order'>): Promise<number> {
+  const [row] = await sql<{ n: string }[]>`
+    SELECT count(*)::text AS n
+    FROM place p
+    WHERE ST_DWithin(p.geom, ST_MakePoint(${p.lon}, ${p.lat})::geography, ${p.radius})
+      ${industryFilter(p.industry)}
+  `
+  return Number(row.n)
+}
+
 export type PlaceDetail = {
   placeId: string
   name: string

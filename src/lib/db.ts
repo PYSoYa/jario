@@ -36,6 +36,10 @@ function create() {
     // 무한정 매달리지는 않게 한다.
     idle_timeout: 20,
     connect_timeout: 10,
+
+    // 쿼리가 막히면 15초에 끊는다. 이게 없으면 서버리스 함수가 300초까지
+    // 붙잡혀 있다가 타임아웃으로 죽고, 그동안 커넥션도 물고 있다.
+    connection: { statement_timeout: 15_000 },
     // 좌표는 double precision으로 오는데 postgres.js 기본 파서면 충분하다.
     // BIGINT는 JS number 정밀도를 넘길 수 있어 문자열로 받는다.
     types: {
