@@ -65,14 +65,37 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f db/etl/transform.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f db/etl/refresh-stats.sql
 
+      # 회전(사라짐·새로 생김)은 분기 두 장을 대조해야 나온다. 최신 분기만 적재하면
+      # 관련 테스트가 통째로 건너뛰어져, 로컬에서만 도는 기능이 CI를 통과한다.
+      - name: 이전 분기 적재 + 차분
+        run: |
+          gunzip -c tests/fixtures/seed-prev.csv.gz > /tmp/seed-prev.csv
+          wc -l /tmp/seed-prev.csv
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "TRUNCATE staging_place;"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+            -c "\copy staging_place FROM '/tmp/seed-prev.csv' WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
+            -v prev_quarter=202512 -v curr_quarter=202606 -f db/etl/churn.sql
+
       - name: 적재 확인
         run: |
           psql "$DATABASE_URL" -X -c "
             SELECT (SELECT count(*) FROM place) AS place,
                    (SELECT count(*) FROM industry) AS industry,
                    (SELECT count(*) FROM dong_stat) AS dong,
+                   (SELECT count(*) FROM market_district) AS 상권,
+                   (SELECT count(*) FROM place_closed) AS 사라짐,
+                   (SELECT count(*) FROM place_opened) AS 새로생김,
                    (SELECT count(*) FROM place
                     WHERE ST_DWithin(geom, ST_MakePoint(126.7244,37.4894)::geography, 500)) AS 부평역500m;"
+          # 회전이 0이면 차분이 안 돈 것이다. 테스트가 조용히 건너뛰므로 여기서 막는다.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "
+            DO \$\$ BEGIN
+              IF (SELECT count(*) FROM place_closed) = 0
+                 OR (SELECT count(*) FROM place_opened) = 0 THEN
+                RAISE EXCEPTION '회전 테이블이 비어 있습니다. 차분 단계를 확인하세요.';
+              END IF;
+            END \$\$;"
 
       - name: 좌표계·인덱스 검증
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/checks/distance_srid.sql

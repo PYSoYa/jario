@@ -70,11 +70,29 @@ else
   check_png "$BASE/r/$id/opengraph-image" "리포트 OG 이미지"
 
   # 미리보기와 본문이 다른 숫자를 말하면 안 된다. 페이지에 총계가 실제로 박혀 있는지 본다.
-  if curl -s --max-time 30 "$BASE/r/$id" | grep -q "3,074"; then
+  html=$(curl -s --max-time 30 "$BASE/r/$id")
+  if printf '%s' "$html" | grep -q "3,074"; then
     ok "리포트 본문에 실제 수치"
   else
     bad "리포트 본문에서 기대한 수치(3,074)를 찾지 못했다"
   fi
+
+  # 자리를 재는 축이 리포트에서 빠지면 안 된다. 밀도만 비교하던 시절로 조용히 돌아간다.
+  for row in "최근 6개월 회전" "공실률" "10평 월 임대료"; do
+    printf '%s' "$html" | grep -q "$row" \
+      && ok "리포트 행: $row" || bad "리포트에 '$row' 행이 없다"
+  done
+
+  # 좁은 화면에서 표가 세로로 무너지는 것을 막는 유일한 장치다.
+  #
+  # table-layout이 auto면 값 열의 내용이 항목 열을 짓눌러, 390px에서 항목 열이 40px까지
+  # 줄고 설명 문구가 한 글자씩 세로로 흘렀다(페이지 높이 2,378px). 가로 넘침은 없어서
+  # 기존 검사는 전부 통과했다.
+  #
+  # 이건 렌더 결과가 아니라 클래스 유무만 보는 좁은 검사다. 진짜 레이아웃 검증에는
+  # 브라우저가 필요하다 — 여기서는 그 회귀 하나만 막는다.
+  printf '%s' "$html" | grep -q "table-fixed" \
+    && ok "리포트 표가 table-fixed" || bad "리포트 표에 table-fixed가 없다 — 좁은 화면에서 무너진다"
 fi
 
 # 로그인이 없어서 이 방어가 뚫리면 무료 티어 DB가 리포트로 찬다.
