@@ -251,6 +251,13 @@ export default function MapPanel() {
   const [dragH, setDragH] = useState<number | null>(null)
   const grab = useRef<{ startY: number; startH: number; moved: boolean } | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
+
+  // 후보지 A/B 비교. 자리를 두 곳 골라 나란히 보는 리포트를 만든다.
+  type Pick = { lon: number; lat: number; label?: string }
+  const [picks, setPicks] = useState<{ a: Pick | null; b: Pick | null }>({ a: null, b: null })
+  const [saving, setSaving] = useState(false)
+  const [reportUrl, setReportUrl] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -416,6 +423,41 @@ export default function MapPanel() {
   })
 
   const spot = spotQuery.data ?? null
+
+  /** 자리 이름은 가장 가까운 업소의 도로명주소 앞부분을 쓴다. 좌표보다 알아보기 쉽다. */
+  const spotLabel = () =>
+    spot?.items[0]?.roadAddress?.split(' ').slice(0, 3).join(' ') || undefined
+
+  const pickHere = (slot: 'a' | 'b') => {
+    setPicks((prev) => ({ ...prev, [slot]: { ...center, label: spotLabel() } }))
+    setReportUrl(null)
+    setSaveError(null)
+  }
+
+  const saveReport = async () => {
+    if (!picks.a || !picks.b) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const res = await fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          radius,
+          industry: industry || null,
+          a: picks.a,
+          b: picks.b,
+        }),
+      })
+      if (!res.ok) throw new Error(`저장에 실패했습니다 (${res.status})`)
+      const { url } = (await res.json()) as { url: string }
+      setReportUrl(new URL(url, window.location.origin).toString())
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : '저장에 실패했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
   const industries = spot?.industries ?? []
   const context = spot
   const focused = spot
@@ -918,6 +960,75 @@ export default function MapPanel() {
                     데이터가 없는 지역입니다.
                   </p>
                 )}
+              </div>
+
+              {/* 후보지 비교. 자리를 두 곳 골라야 의미가 생기는 기능이라
+                  버튼을 항상 두고, 둘 다 정해지면 저장이 열린다. */}
+              <div className="border-t border-line px-5 py-4">
+                <h2 className="mb-2 text-xs font-medium tracking-wide text-muted">후보지 비교</h2>
+                <div className="flex gap-1.5">
+                  {(['a', 'b'] as const).map((slot) => {
+                    const p = picks[slot]
+                    const isHere =
+                      p && Math.abs(p.lon - center.lon) < 1e-9 && Math.abs(p.lat - center.lat) < 1e-9
+                    return (
+                      <button
+                        key={slot}
+                        type="button"
+                        onClick={() => pickHere(slot)}
+                        className={`flex-1 rounded border px-3 py-1.5 text-left text-xs transition-colors ${
+                          isHere
+                            ? 'border-commerce bg-commerce/15 text-paper'
+                            : 'border-line text-muted hover:border-muted hover:text-paper'
+                        }`}
+                      >
+                        <span className="measure">{slot.toUpperCase()}</span>
+                        <span className="ml-1.5">{p ? '' : '로 지정'}</span>
+                        {p && (
+                          <span className="mt-0.5 block truncate text-muted">
+                            {p.label ?? '지정됨'}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {picks.a && picks.b && !reportUrl && (
+                  <button
+                    type="button"
+                    onClick={saveReport}
+                    disabled={saving}
+                    className="mt-2 w-full rounded border border-commerce bg-commerce/15 px-3 py-1.5 text-sm text-paper transition-colors hover:bg-commerce/25 disabled:opacity-50"
+                  >
+                    {saving ? '만드는 중…' : '비교 리포트 만들기'}
+                  </button>
+                )}
+
+                {reportUrl && (
+                  <div className="mt-2 rounded border border-line bg-raised px-3 py-2">
+                    <p className="text-xs text-muted">링크가 만들어졌습니다.</p>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <a
+                        href={reportUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="min-w-0 flex-1 truncate text-xs text-commerce underline"
+                      >
+                        {reportUrl}
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard?.writeText(reportUrl)}
+                        className="shrink-0 rounded border border-line px-2 py-0.5 text-xs text-muted hover:text-paper"
+                      >
+                        복사
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {saveError && <p className="mt-2 text-xs text-paper">{saveError}</p>}
               </div>
 
               {context && context.breakdown.length > 0 && (
