@@ -34,7 +34,12 @@ export async function GET(request: Request) {
   }
 
   try {
-    return Response.json(await searchSpots(parsed.data))
+    // 콜드 스타트에서 8초가 걸렸다. 쿼리 자체는 로컬 60ms라, 어디에 쓰였는지
+    // 갈라야 했다 — 여기 찍힌 시간이 짧으면 나머지는 플랫폼 초기화다.
+    const t0 = Date.now()
+    const r = await searchSpots(parsed.data)
+    console.log(`[search] query ${Date.now() - t0}ms`)
+    return Response.json(r)
   } catch (err) {
     console.error('[search]', err)
     return Response.json({ error: '조회에 실패했습니다.' }, { status: 500 })
