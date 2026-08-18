@@ -1,6 +1,6 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import Script from 'next/script'
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import DongRanking from './DongRanking'
@@ -384,6 +384,10 @@ export default function MapPanel() {
     queryKey: ['spot', center.lon, center.lat, radius, industry],
     queryFn: ({ signal }) =>
       fetchSpot({ ...center, radius, industry: industry || undefined }, signal),
+    // 키가 바뀌면 기본값은 data가 undefined가 된다. 그러면 반경이나 업종을 바꿀
+    // 때마다 패널이 통째로 비고, 업종 목록도 응답에 실려 오므로 select 옵션까지
+    // 사라졌다가 돌아온다. 이전 결과를 유지하고 새 값이 오면 갈아끼운다.
+    placeholderData: keepPreviousData,
   })
 
   const detailQuery = useQuery({
